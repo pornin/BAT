@@ -1,7 +1,22 @@
 .POSIX:
 
 CC = clang
-CFLAGS = -Wall -Wextra -Wshadow -Wundef -O2
+
+CFLAGS = -Wall -Wextra -Wshadow -Wundef -O3
+# To allow clang to optimize for the local machine, add:
+#    -march=native
+# (this will activate automatic vectorization by clang, if the local machine
+# can do it; but the binary may fail to run on older CPU)
+#
+# To use the AVX2-specific code, add:
+#    -DBAT_AVX2
+# (this will use all the code wil explicit AVX2 intrinsic functions; the
+# binary won't run on a machine without AVX2)
+#
+# You can use -march=native and -DBAT_AVX2 at the same time, for the
+# highest optimization:
+# CFLAGS = -Wall -Wextra -Wshadow -Wundef -O3 -march=native -DBAT_AVX2
+
 LD = clang
 LDFLAGS =
 LIBS =

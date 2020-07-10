@@ -426,7 +426,7 @@ main(int argc, char *argv[])
 	printf("time threshold = %.4f s\n", threshold);
 	printf("esk / dsk = encode / decode private key (s = short format, l = long format)\n");
 	printf("epk / dpk = encode / decode public key\n");
-	printf("ect / dct = encode / decode ciphetext\n");
+	printf("ect / dct = encode / decode ciphertext\n");
 	printf("ecp = encapsulate, dcp = decapsulate (nofo = without Fujisaki-Okamoto)\n");
 	printf("keygen in milliseconds, all other times in microseconds\n");
 	printf("              "
