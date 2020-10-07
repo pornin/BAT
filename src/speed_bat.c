@@ -12,6 +12,34 @@
 #include "bat.h"
 #include "inner.h"
 
+#ifndef DO_BENCH86
+#if defined __i386__ || defined _M_IX86 || defined __x86_64__ || defined _M_X64
+#define DO_BENCH86   1
+#else
+#define DO_BENCH86   0
+#endif
+#endif
+
+#if DO_BENCH86
+#include <immintrin.h>
+
+static inline uint64_t
+core_cycles(void)
+{
+#if defined __GNUC__ && !defined __clang__
+	uint32_t hi, lo;
+
+	_mm_lfence();
+	__asm__ __volatile__ ("rdtsc" : "=d" (hi), "=a" (lo) : : );
+	return ((uint64_t)hi << 32) | (uint64_t)lo;
+#else
+	_mm_lfence();
+	return __rdtsc();
+#endif
+}
+
+#endif
+
 static void *
 xmalloc(size_t len)
 {
@@ -43,8 +71,11 @@ xfree(void *buf)
 typedef int (*bench_fun)(void *ctx, unsigned long num);
 
 /*
- * Returned value is the time per iteration in nanoseconds. If the
- * benchmark function reports an error, 0.0 is returned.
+ * Returned value is the time per iteration in nanoseconds.
+ * WARNING: ON x86, VALUES ARE RETURNED IN CLOCK CYCLES, NOT NANOSECONDS;
+ * THRESHOLD IS IN BILLIONS OF CYCLES.
+ *
+ * If the benchmark function reports an error, 0.0 is returned.
  */
 static double
 do_bench(bench_fun bf, void *ctx, double threshold)
@@ -64,17 +95,33 @@ do_bench(bench_fun bf, void *ctx, double threshold)
 
 	num = 1;
 	for (;;) {
+#if DO_BENCH86
+		uint64_t begin, end;
+#else
 		clock_t begin, end;
+#endif
 		double tt;
 
+#if DO_BENCH86
+		begin = core_cycles();
+#else
 		begin = clock();
+#endif
 		r = bf(ctx, num);
+#if DO_BENCH86
+		end = core_cycles();
+#else
 		end = clock();
+#endif
 		if (r != 0) {
 			fprintf(stderr, "ERR: %d\n", r);
 			return 0.0;
 		}
+#if DO_BENCH86
+		tt = (double)(end - begin) / (double)1000000000.0;
+#else
 		tt = (double)(end - begin) / (double)CLOCKS_PER_SEC;
+#endif
 		if (tt >= threshold) {
 			return tt * 1000000000.0 / (double)num;
 		}
@@ -338,60 +385,7 @@ Bn(q, n, all)(double threshold) \
 		exit(EXIT_FAILURE); \
 	} \
  \
-	printf(" %8.2f", \
-		do_bench(&Bn(q, n, keygen), \
-		&bc, threshold) / 1000000.0); \
-	fflush(stdout); \
-	printf(" %8.2f", \
-		do_bench(&Bn(q, n, encode_private_key_short), \
-		&bc, threshold) / 1000.0); \
-	fflush(stdout); \
-	printf(" %8.2f", \
-		do_bench(&Bn(q, n, decode_private_key), \
-		&bc, threshold) / 1000.0); \
-	fflush(stdout); \
-	printf(" %8.2f", \
-		do_bench(&Bn(q, n, encode_private_key_long), \
-		&bc, threshold) / 1000.0); \
-	fflush(stdout); \
-	printf(" %8.2f", \
-		do_bench(&Bn(q, n, decode_private_key), \
-		&bc, threshold) / 1000.0); \
-	fflush(stdout); \
-	Zn(q, n, get_public_key)(&bc.pk, &bc.sk); \
-	printf(" %8.2f", \
-		do_bench(&Bn(q, n, encode_public_key), \
-		&bc, threshold) / 1000.0); \
-	fflush(stdout); \
-	printf(" %8.2f", \
-		do_bench(&Bn(q, n, decode_public_key), \
-		&bc, threshold) / 1000.0); \
-	fflush(stdout); \
-	printf(" %8.2f", \
-		do_bench(&Bn(q, n, encapsulate_nofo), \
-		&bc, threshold) / 1000.0); \
-	fflush(stdout); \
-	printf(" %8.2f", \
-		do_bench(&Bn(q, n, encapsulate), \
-		&bc, threshold) / 1000.0); \
-	fflush(stdout); \
-	printf(" %8.2f", \
-		do_bench(&Bn(q, n, decapsulate_nofo), \
-		&bc, threshold) / 1000.0); \
-	fflush(stdout); \
-	printf(" %8.2f", \
-		do_bench(&Bn(q, n, decapsulate), \
-		&bc, threshold) / 1000.0); \
-	fflush(stdout); \
-	printf(" %8.2f", \
-		do_bench(&Bn(q, n, encode_ciphertext), \
-		&bc, threshold) / 1000.0); \
-	fflush(stdout); \
-	printf(" %8.2f", \
-		do_bench(&Bn(q, n, decode_ciphertext), \
-		&bc, threshold) / 1000.0); \
-	printf("\n"); \
-	fflush(stdout); \
+ 	PRINT_BENCHS(q, n); \
  \
 	xfree(bc.enc_sk); \
 	xfree(bc.enc_pk); \
@@ -399,6 +393,124 @@ Bn(q, n, all)(double threshold) \
 	xfree(bc.tmp); \
 	xfree(bc.sbuf); \
 }
+
+#if DO_BENCH86
+#define PRINT_BENCHS(q, n) \
+	do { \
+		printf(" %7.0fk", \
+			do_bench(&Bn(q, n, keygen), \
+			&bc, threshold) / 1000.0); \
+		fflush(stdout); \
+		printf(" %8.0f", \
+			do_bench(&Bn(q, n, encode_private_key_short), \
+			&bc, threshold)); \
+		fflush(stdout); \
+		printf(" %8.0f", \
+			do_bench(&Bn(q, n, decode_private_key), \
+			&bc, threshold)); \
+		fflush(stdout); \
+		printf(" %8.0f", \
+			do_bench(&Bn(q, n, encode_private_key_long), \
+			&bc, threshold)); \
+		fflush(stdout); \
+		printf(" %8.0f", \
+			do_bench(&Bn(q, n, decode_private_key), \
+			&bc, threshold)); \
+		fflush(stdout); \
+		Zn(q, n, get_public_key)(&bc.pk, &bc.sk); \
+		printf(" %8.0f", \
+			do_bench(&Bn(q, n, encode_public_key), \
+			&bc, threshold)); \
+		fflush(stdout); \
+		printf(" %8.0f", \
+			do_bench(&Bn(q, n, decode_public_key), \
+			&bc, threshold)); \
+		fflush(stdout); \
+		printf(" %8.0f", \
+			do_bench(&Bn(q, n, encapsulate_nofo), \
+			&bc, threshold)); \
+		fflush(stdout); \
+		printf(" %8.0f", \
+			do_bench(&Bn(q, n, encapsulate), \
+			&bc, threshold)); \
+		fflush(stdout); \
+		printf(" %8.0f", \
+			do_bench(&Bn(q, n, decapsulate_nofo), \
+			&bc, threshold)); \
+		fflush(stdout); \
+		printf(" %8.0f", \
+			do_bench(&Bn(q, n, decapsulate), \
+			&bc, threshold)); \
+		fflush(stdout); \
+		printf(" %8.0f", \
+			do_bench(&Bn(q, n, encode_ciphertext), \
+			&bc, threshold)); \
+		fflush(stdout); \
+		printf(" %8.0f", \
+			do_bench(&Bn(q, n, decode_ciphertext), \
+			&bc, threshold)); \
+		printf("\n"); \
+		fflush(stdout); \
+	} while (0)
+#else
+#define PRINT_BENCHS(q, n) \
+	do { \
+		printf(" %8.2f", \
+			do_bench(&Bn(q, n, keygen), \
+			&bc, threshold) / 1000000.0); \
+		fflush(stdout); \
+		printf(" %8.2f", \
+			do_bench(&Bn(q, n, encode_private_key_short), \
+			&bc, threshold) / 1000.0); \
+		fflush(stdout); \
+		printf(" %8.2f", \
+			do_bench(&Bn(q, n, decode_private_key), \
+			&bc, threshold) / 1000.0); \
+		fflush(stdout); \
+		printf(" %8.2f", \
+			do_bench(&Bn(q, n, encode_private_key_long), \
+			&bc, threshold) / 1000.0); \
+		fflush(stdout); \
+		printf(" %8.2f", \
+			do_bench(&Bn(q, n, decode_private_key), \
+			&bc, threshold) / 1000.0); \
+		fflush(stdout); \
+		Zn(q, n, get_public_key)(&bc.pk, &bc.sk); \
+		printf(" %8.2f", \
+			do_bench(&Bn(q, n, encode_public_key), \
+			&bc, threshold) / 1000.0); \
+		fflush(stdout); \
+		printf(" %8.2f", \
+			do_bench(&Bn(q, n, decode_public_key), \
+			&bc, threshold) / 1000.0); \
+		fflush(stdout); \
+		printf(" %8.2f", \
+			do_bench(&Bn(q, n, encapsulate_nofo), \
+			&bc, threshold) / 1000.0); \
+		fflush(stdout); \
+		printf(" %8.2f", \
+			do_bench(&Bn(q, n, encapsulate), \
+			&bc, threshold) / 1000.0); \
+		fflush(stdout); \
+		printf(" %8.2f", \
+			do_bench(&Bn(q, n, decapsulate_nofo), \
+			&bc, threshold) / 1000.0); \
+		fflush(stdout); \
+		printf(" %8.2f", \
+			do_bench(&Bn(q, n, decapsulate), \
+			&bc, threshold) / 1000.0); \
+		fflush(stdout); \
+		printf(" %8.2f", \
+			do_bench(&Bn(q, n, encode_ciphertext), \
+			&bc, threshold) / 1000.0); \
+		fflush(stdout); \
+		printf(" %8.2f", \
+			do_bench(&Bn(q, n, decode_ciphertext), \
+			&bc, threshold) / 1000.0); \
+		printf("\n"); \
+		fflush(stdout); \
+	} while (0)
+#endif
 
 MK_BENCH_FUNS(128, 256)
 MK_BENCH_FUNS(257, 512)
@@ -423,12 +535,20 @@ main(int argc, char *argv[])
 "positive and less than 60).\n");
 		exit(EXIT_FAILURE);
 	}
+#if DO_BENCH86
+	printf("time threshold = %.4f Gcyc\n", threshold);
+#else
 	printf("time threshold = %.4f s\n", threshold);
+#endif
 	printf("esk / dsk = encode / decode private key (s = short format, l = long format)\n");
 	printf("epk / dpk = encode / decode public key\n");
 	printf("ect / dct = encode / decode ciphertext\n");
 	printf("ecp = encapsulate, dcp = decapsulate (nofo = without Fujisaki-Okamoto)\n");
+#if DO_BENCH86
+	printf("x86 PLATFORM, USING TSC; VALUES IN CLOCK CYCLES\n");
+#else
 	printf("keygen in milliseconds, all other times in microseconds\n");
+#endif
 	printf("              "
 		"   keygen"
 		"    esk-s"

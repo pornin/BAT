@@ -2496,6 +2496,9 @@ mkgauss(shake_context *rng, int8_t *f, uint32_t q, unsigned logn, int lim)
 		tab = gauss_1024_769;
 		kmax = 6;
 		break;
+	default:
+		/* impossible in practice */
+		return 0;
 	}
 
 	n = (size_t)1 << logn;

@@ -101,7 +101,7 @@ mq_add_x16(__m256i x, __m256i y)
 	__m256i Qx16 = _mm256_set1_epi16(Q);
 
 	x = _mm256_sub_epi16(
-		_mm256_set1_epi16(Q),
+		Qx16,
 		_mm256_add_epi16(x, y));
 	x = _mm256_add_epi16(
 		x,
