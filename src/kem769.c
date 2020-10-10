@@ -35,13 +35,13 @@ bat_make_public_769(uint16_t *h, const int8_t *f, const int8_t *g,
 }
 
 /* see inner.h */
-int
+uint32_t
 bat_encapsulate_769(int8_t *c, const uint8_t *sbuf,
 	const uint16_t *h, unsigned logn, uint32_t *tmp)
 {
 	size_t u, n;
 	uint16_t *t1, *t2;
-	int e2norm;
+	uint32_t e2norm;
 
 	n = (size_t)1 << logn;
 	t1 = (uint16_t *)tmp;
@@ -89,7 +89,7 @@ bat_encapsulate_769(int8_t *c, const uint8_t *sbuf,
 		c[u] = z;
 		ep = (4 * z - y);
 		ep = 2 * ep - 1;
-		e2norm += ep * ep;
+		e2norm += (uint32_t)(ep * ep);
 	}
 
 	/*
@@ -115,8 +115,13 @@ bat_encapsulate_769(int8_t *c, const uint8_t *sbuf,
 	 * Note that 11.664*n is not an integer for any of the supported
 	 * degrees (2 to 1024). For logn in 1..10:
 	 *    floor(11.664*2^logn) = floor(11943 / 2^(10-logn))
+	 *
+	 * We need the comparison to be constant-time, thus we avoid
+	 * using a direct comparison operator (which may be translated
+	 * by the C compiler into a conditional jump on some architectures).
 	 */
-	return ((5 << logn) + e2norm) <= (11943 >> (10 - logn));
+	e2norm = (5u << logn) + e2norm - 1u - (11943u >> (10 - logn));
+	return e2norm >> 31;
 }
 
 /* see inner.h */

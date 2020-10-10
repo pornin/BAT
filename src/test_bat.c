@@ -1979,7 +1979,6 @@ test_kem_inner_spec(uint32_t q, unsigned logn)
 		 * Do some encapsulation / decapsulation.
 		 */
 		for (j = 0; j < 100; j ++) {
-			uint8_t enc_seed[32];
 			uint8_t sbuf[128], sbuf2[128];
 			int r;
 
@@ -1988,9 +1987,10 @@ test_kem_inner_spec(uint32_t q, unsigned logn)
 				| (uint64_t)i | ((uint64_t)j << 16));
 
 			for (;;) {
-				shake_extract(&rng, enc_seed, sizeof enc_seed);
-				bat_seed_to_sbuf(sbuf, q, logn,
-					enc_seed, sizeof enc_seed);
+				shake_extract(&rng, sbuf, SBUF_LEN(logn));
+				if (logn < 3) {
+					sbuf[0] &= (1u << (1u << logn)) - 1u;
+				}
 
 				prep_tmp(tmp.w, sizeof tmp.w, i);
 				switch (q) {
@@ -2223,7 +2223,6 @@ test_kem_128_256(void)
 					" (%zu vs %zu)\n", len, len2);
 				exit(EXIT_FAILURE);
 			}
-			check_equals(ct.fo, ct2.fo, sizeof ct.fo, "ct fo");
 			check_equals(ct.c, ct2.c, sizeof ct.c, "ct c");
 
 			CC(bat_128_256_decapsulate(secret2, sizeof secret2,
@@ -2366,7 +2365,6 @@ test_kem_257_512(void)
 					" (%zu vs %zu)\n", len, len2);
 				exit(EXIT_FAILURE);
 			}
-			check_equals(ct.fo, ct2.fo, sizeof ct.fo, "ct fo");
 			check_equals(ct.c, ct2.c, sizeof ct.c, "ct c");
 
 			CC(bat_257_512_decapsulate(secret2, sizeof secret2,
@@ -2509,7 +2507,6 @@ test_kem_769_1024(void)
 					" (%zu vs %zu)\n", len, len2);
 				exit(EXIT_FAILURE);
 			}
-			check_equals(ct.fo, ct2.fo, sizeof ct.fo, "ct fo");
 			check_equals(ct.c, ct2.c, sizeof ct.c, "ct c");
 
 			CC(bat_769_1024_decapsulate(secret2, sizeof secret2,

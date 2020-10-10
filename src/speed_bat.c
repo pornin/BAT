@@ -7,8 +7,6 @@
 #include <string.h>
 #include <time.h>
 
-#include <unistd.h>
-
 #include "bat.h"
 #include "inner.h"
 

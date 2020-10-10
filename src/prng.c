@@ -23,7 +23,9 @@
 #endif
 #if BAT_RAND_WIN32
 #include <windows.h>
-#include <wincrypt.h>
+#define SystemFunction036   NTAPI SystemFunction036
+#include <NTSecAPI.h>
+#undef SystemFunction036
 #pragma comment(lib, "advapi32")
 #endif
 
@@ -41,10 +43,19 @@ bat_get_seed(void *seed, size_t len)
 	}
 #endif
 #if BAT_RAND_URANDOM
+	/*
+	 * We could try to optimize this code with some caching of the
+	 * file descriptor, but this raises extra difficulties (this is
+	 * hard to make thread-safe without dabbling with a mutex). It
+	 * is simpler to assume that any Unix-like platform for which it
+	 * is worth optimizing performance will also have a recent
+	 * enough OS to use getentropy() (possibly as a wrapper around
+	 * getrandom()).
+	 */
 	{
 		int f;
 
-		f = open("/dev/urandom", O_RDONLY);
+		f = open("/dev/urandom", O_RDONLY | O_CLOEXEC);
 		if (f >= 0) {
 			while (len > 0) {
 				ssize_t rlen;
@@ -67,20 +78,15 @@ bat_get_seed(void *seed, size_t len)
 	}
 #endif
 #if BAT_RAND_WIN32
-	{
-		HCRYPTPROV hp;
-
-		if (CryptAcquireContext(&hp, 0, 0, PROV_RSA_FULL,
-			CRYPT_VERIFYCONTEXT | CRYPT_SILENT))
-		{
-			BOOL r;
-
-			r = CryptGenRandom(hp, (DWORD)len, seed);
-			CryptReleaseContext(hp, 0);
-			if (r) {
-				return 1;
-			}
-		}
+	/*
+	 * Nominally, a "Win32" implementation should use CryptoAPI
+	 * (CryptAcquireContext(), then CryptGenRandom()) but this is
+	 * quite inefficient and error prone. Since Windows XP and
+	 * Windows Server 2003, the RtlGenRandom() function (from
+	 * advapi32.dll) offers a much direct road to the OS RNG.
+	 */
+	if (RtlGenRandom(seed, len)) {
+		return 1;
 	}
 #endif
 	return 0;

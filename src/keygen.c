@@ -4899,31 +4899,68 @@ bat_keygen_make_fg(int8_t *f, int8_t *g, uint16_t *h,
 
 	n = (size_t)1 << logn;
 
+	static const char *tags_128[] = {
+		NULL, // unused
+		"BAT-kg-128-2:",
+		"BAT-kg-128-4:",
+		"BAT-kg-128-8:",
+		"BAT-kg-128-16:",
+		"BAT-kg-128-32:",
+		"BAT-kg-128-64:",
+		"BAT-kg-128-128:",
+		"BAT-kg-128-256:"
+	};
+	static const char *tags_257[] = {
+		NULL, // unused
+		"BAT-kg-257-2:",
+		"BAT-kg-257-4:",
+		"BAT-kg-257-8:",
+		"BAT-kg-257-16:",
+		"BAT-kg-257-32:",
+		"BAT-kg-257-64:",
+		"BAT-kg-257-128:",
+		"BAT-kg-257-256:",
+		"BAT-kg-257-512:"
+	};
+	static const char *tags_769[] = {
+		NULL, // unused
+		"BAT-kg-769-2:",
+		"BAT-kg-769-4:",
+		"BAT-kg-769-8:",
+		"BAT-kg-769-16:",
+		"BAT-kg-769-32:",
+		"BAT-kg-769-64:",
+		"BAT-kg-769-128:",
+		"BAT-kg-769-256:",
+		"BAT-kg-769-512:",
+		"BAT-kg-769-1024:"
+	};
+
 	switch (q) {
 	case 128:
 		if (logn == 0 || logn > 8) {
 			return 0;
 		}
-		tag = "BAT-kg-128:";
+		tag = tags_128[logn];
 		break;
 	case 257:
 		if (logn == 0 || logn > 9) {
 			return 0;
 		}
-		tag = "BAT-kg-257:";
+		tag = tags_257[logn];
 		break;
 	case 769:
 		if (logn == 0 || logn > 10) {
 			return 0;
 		}
-		tag = "BAT-kg-769:";
+		tag = tags_769[logn];
 		break;
 	default:
 		return 0;
 	}
 
 	shake_init(&rng, 256);
-	shake_inject(&rng, tag, 11);
+	shake_inject(&rng, tag, strlen(tag));
 	tt = logn;
 	shake_inject(&rng, &tt, 1);
 	shake_inject(&rng, seed, seed_len);

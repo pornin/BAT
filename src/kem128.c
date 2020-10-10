@@ -417,7 +417,7 @@ bat_make_public_128(uint8_t *h, const int8_t *f, const int8_t *g,
 }
 
 /* see inner.h */
-int
+uint32_t
 bat_encapsulate_128(int8_t *c, const uint8_t *sbuf,
 	const uint8_t *h, unsigned logn, uint32_t *tmp)
 {

@@ -21,7 +21,7 @@ LD = clang
 LDFLAGS =
 LIBS =
 
-OBJ = api_128_256.o api_257_512.o api_769_1024.o codec.o fft.o fnr.o kem.o kem128.o kem257.o kem769.o keygen.o modqp.o prng.o sha3.o
+OBJ = api_128_256.o api_257_512.o api_769_1024.o codec.o fft.o fnr.o kem128.o kem257.o kem769.o keygen.o modqp.o prng.o sha3.o
 
 all: test_bat speed_bat
 
@@ -51,9 +51,6 @@ fft.o: fft.c inner.h sha3.h
 
 fnr.o: fnr.c inner.h sha3.h
 	$(CC) $(CFLAGS) -c -o fnr.o fnr.c
-
-kem.o: kem.c inner.h sha3.h
-	$(CC) $(CFLAGS) -c -o kem.o kem.c
 
 kem128.o: kem128.c inner.h sha3.h
 	$(CC) $(CFLAGS) -c -o kem128.o kem128.c

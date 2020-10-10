@@ -151,12 +151,14 @@
  *      the secret is for.
  *
  *      On success, 0 is returned; on error, a negative error code is
- *      returned and the secret value is not produced. If provided
- *      temporary buffer (tmp, of size tmp_len bytes) is too small, then
- *      BAT_ERR_NOSPACE is returned (see BAT_qqq_nnn_TMP_DECAPS). If
- *      the process fails for any other reason, then BAT_ERR_DECAPS_FAILED
- *      is returned (possible failure reasons are not distinguished from
- *      each other on purpose).
+ *      returned and the secret value is not produced. Such errors are
+ *      reported only for local technical reasons unrelated to the
+ *      received ciphertext; e.g. BAT_ERR_NOSPACE is returned if the
+ *      tmp[] buffer (of size tmp_len bytes) is returned. By
+ *      construction of the algorithm, invalid ciphertext values lead to
+ *      a recovered shared secret which is deterministic from the
+ *      ciphertext and private key, but unpredictable by third parties;
+ *      in such cases, this function reports a success (0).
  */
 
 #define BAT_MK(q, n, htype) \
@@ -167,6 +169,7 @@ typedef struct { \
 	int8_t G[n]; \
 	int16_t w[n]; \
 	htype h[n]; \
+	uint8_t rr[32]; \
 	uint8_t seed[32]; \
 } bat_ ## q ## _ ## n ## _private_key; \
 typedef struct { \
@@ -174,7 +177,6 @@ typedef struct { \
 } bat_ ## q ## _ ## n ## _public_key; \
 typedef struct { \
 	int8_t c[n]; \
-	uint8_t fo[32]; \
 } bat_ ## q ## _ ## n ## _ciphertext; \
 int bat_ ## q ## _ ## n ## _keygen(bat_ ## q ## _ ## n ## _private_key *sk, \
 	void *tmp, size_t tmp_len); \

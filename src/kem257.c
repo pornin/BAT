@@ -35,7 +35,7 @@ bat_make_public_257(uint16_t *h, const int8_t *f, const int8_t *g,
 }
 
 /* see inner.h */
-int
+uint32_t
 bat_encapsulate_257(int8_t *c, const uint8_t *sbuf,
 	const uint16_t *h, unsigned logn, uint32_t *tmp)
 {

@@ -511,9 +511,9 @@ shake_flip(shake_context *sc)
 	 */
 	unsigned v;
 
-	v = sc->dptr;
+	v = (unsigned)sc->dptr;
 	sc->A[v >> 3] ^= (uint64_t)0x1F << ((v & 7) << 3);
-	v = sc->rate - 1;
+	v = (unsigned)sc->rate - 1;
 	sc->A[v >> 3] ^= (uint64_t)0x80 << ((v & 7) << 3);
 	sc->dptr = sc->rate;
 }
@@ -541,7 +541,8 @@ shake_extract(shake_context *sc, void *out, size_t len)
 		}
 		len -= clen;
 		while (clen -- > 0) {
-			*buf ++ = sc->A[dptr >> 3] >> ((dptr & 7) << 3);
+			*buf ++ = (uint8_t)(sc->A[dptr >> 3]
+				>> ((dptr & 7) << 3));
 			dptr ++;
 		}
 	}
@@ -574,9 +575,9 @@ sha3_close(sha3_context *sc, void *out)
 	 * Apply padding. It differs from the SHAKE padding in that
 	 * we append '01', not '1111'.
 	 */
-	v = sc->dptr;
+	v = (unsigned)sc->dptr;
 	sc->A[v >> 3] ^= (uint64_t)0x06 << ((v & 7) << 3);
-	v = sc->rate - 1;
+	v = (unsigned)sc->rate - 1;
 	sc->A[v >> 3] ^= (uint64_t)0x80 << ((v & 7) << 3);
 
 	/*
@@ -590,6 +591,6 @@ sha3_close(sha3_context *sc, void *out)
 	buf = out;
 	len = (200 - sc->rate) >> 1;
 	for (u = 0; u < len; u ++) {
-		buf[u] = sc->A[u >> 3] >> ((u & 7) << 3);
+		buf[u] = (uint8_t)(sc->A[u >> 3] >> ((u & 7) << 3));
 	}
 }

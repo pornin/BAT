@@ -44,6 +44,9 @@
  */
 #if defined _MSC_VER && _MSC_VER
 #pragma warning( disable : 4146 )
+#pragma warning( disable : 4244 )
+#pragma warning( disable : 4267 )
+#pragma warning( disable : 4334 )
 #endif
 
 /*
@@ -574,60 +577,11 @@ int bat_rebuild_G_769(int8_t *G,
 /* ====================================================================== */
 
 /*
- * Make a secret value sbuf[] of the right length, from a given seed.
- * For degree n = 2^logn, exactly n bits are produced and stored in
- * sbuf[]; they are interpreted as a polynomial modulo X^n+1 with
- * coefficients in {0,1} (coefficient for X^i is bit (i mod 8) of byte
- * floor(i/8), with bit 0 being the least significant in a byte).
- *
- * If using a very reduced toy version (logn = 1 or 2), then only 2 or 4
- * bits are produced; the unused upper bits of sbuf[0] are cleared.
- *
- * Internally, SHAKE256 is used over an input which is the concatenation
- * of:
- *   - the ASCII string "BAT-enc-128:", "BAT-enc-257:" or "BAT-enc-769:",
- *     for q = 128, 257 or 769, respectively (12 bytes exactly, without the
- *     double quotes);
- *   - a single byte of value 1 to 10, containing logn;
- *   - the provided seed (seed_len bytes).
- *
- * Output of SHAKE256 is used "as is" into sbuf[] (with clearing of the
- * unused bits in the last bytes for toy versions).
- *
- * Value q MUST be one of the supported values (128, 257 or 769).
- */
-void bat_seed_to_sbuf(uint8_t *sbuf, uint32_t q, unsigned logn,
-	const void *seed, size_t seed_len);
-
-/*
  * Get the length of sbuf, for a given degree n, with n = 2^logn.
  * The logn parameter must be between 1 and 10, inclusive. Returned length
  * is in bytes, between 1 and 128, inclusive.
  */
 #define SBUF_LEN(logn)   (((1 << (logn)) + 7) >> 3)
-
-/*
- * Derive the secret sbuf[] into a 32-byte mask (for FO transform) and
- * an arbitrary-length shared secret (which is the ultimate output of the
- * encapsulation/decapsulation process). The shared secret length can be
- * arbitrary.
- *
- * Internally, SHAKE256 is used over an input which is the concatenation
- * of:
- *   - the ASCII string "BAT-kdf-128:", "BAT-kdf-257:" or "BAT-kdf-769:",
- *     for q = 128, 257 or 769, respectively (12 bytes exactly, without the
- *     double quotes);
- *   - a single byte of value 1 to 10, containing logn;
- *   - the provided sbuf (length depends on logn, see SBUF_LEN).
- *
- * First 32 bytes of SHAKE256 output are the mask for the FO transform;
- * subsequent bytes are the shared secret.
- *
- * Value q MUST be one of the supported values (128, 257 or 769).
- */
-void bat_sbuf_to_secret_and_mask(
-	uint8_t *mask, void *secret, size_t secret_len,
-	uint32_t q, unsigned logn, const uint8_t *sbuf);
 
 /*
  * Encapsulate: given public key (in h) and a secret value sbuf[]
@@ -640,7 +594,7 @@ void bat_sbuf_to_secret_and_mask(
  *
  * Size of tmp[]: 3*n/4 elements (3*n bytes)
  */
-int bat_encapsulate_128(int8_t *c, const uint8_t *sbuf,
+uint32_t bat_encapsulate_128(int8_t *c, const uint8_t *sbuf,
 	const uint8_t *h, unsigned logn, uint32_t *tmp);
 
 /*
@@ -653,7 +607,7 @@ int bat_encapsulate_128(int8_t *c, const uint8_t *sbuf,
  *
  * Size of tmp[]: n elements (4*n bytes).
  */
-int bat_encapsulate_257(int8_t *c, const uint8_t *sbuf,
+uint32_t bat_encapsulate_257(int8_t *c, const uint8_t *sbuf,
 	const uint16_t *h, unsigned logn, uint32_t *tmp);
 
 /*
@@ -669,7 +623,7 @@ int bat_encapsulate_257(int8_t *c, const uint8_t *sbuf,
  *
  * Size of tmp[]: 3*n/4 elements (3*n bytes).
  */
-int bat_encapsulate_769(int8_t *c, const uint8_t *sbuf,
+uint32_t bat_encapsulate_769(int8_t *c, const uint8_t *sbuf,
 	const uint16_t *h, unsigned logn, uint32_t *tmp);
 
 /*
@@ -1137,7 +1091,7 @@ size_t bat_decode_ciphertext_769(int8_t *c, unsigned logn,
 
 /*
  * Obtain a random seed from the system RNG. Maximum allowed seed length
- * is 256 bytes.
+ * is 2048 bits (256 bytes).
  *
  * Returned value is 1 on success, 0 on error.
  */
