@@ -161,13 +161,13 @@
  *      in such cases, this function reports a success (0).
  */
 
-#define BAT_MK(q, n, htype) \
+#define BAT_MK(q, n, lvl_bytes, htype) \
 typedef struct { \
 	int8_t f[n]; \
 	int8_t g[n]; \
 	int8_t F[n]; \
 	int8_t G[n]; \
-	int16_t w[n]; \
+	int32_t w[n]; \
 	htype h[n]; \
 	uint8_t rr[32]; \
 	uint8_t seed[32]; \
@@ -177,6 +177,7 @@ typedef struct { \
 } bat_ ## q ## _ ## n ## _public_key; \
 typedef struct { \
 	int8_t c[n]; \
+	uint8_t c2[lvl_bytes]; \
 } bat_ ## q ## _ ## n ## _ciphertext; \
 int bat_ ## q ## _ ## n ## _keygen(bat_ ## q ## _ ## n ## _private_key *sk, \
 	void *tmp, size_t tmp_len); \
@@ -213,9 +214,9 @@ int bat_ ## q ## _ ## n ## _decapsulate( \
 	const bat_ ## q ## _ ## n ## _private_key *sk, \
 	void *tmp, size_t tmp_len);
 
-BAT_MK(128, 256, uint8_t)
-BAT_MK(257, 512, uint16_t)
-BAT_MK(769, 1024, uint16_t)
+BAT_MK(128, 256, 10, uint8_t)
+BAT_MK(257, 512, 16, uint16_t)
+BAT_MK(769, 1024, 32, uint16_t)
 
 #undef BAT_MK
 

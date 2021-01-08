@@ -2407,10 +2407,10 @@ static const uint64_t gauss_512_257[] = {
 };
 
 static const uint64_t gauss_1024_769[] = {
-	               19185u,            604165282u,        2894352582314u,
-	    2111187250683112u,   235754039529728667u,  4174204903223945970u,
-	14272539170485605644u, 18210990034179822947u, 18444632886458868502u,
-	18446741179356969300u, 18446744073105386332u, 18446744073709532429u
+	                  11u,              3660696u,         114233193962u,
+	     357617305475568u,   112576638291761591u,  3645534795308962022u,
+	14801209278400589592u, 18334167435417790023u, 18446386456404076046u,
+	18446743959476357652u, 18446744073705890918u, 18446744073709551603u
 };
 
 /*
@@ -2662,6 +2662,8 @@ align_u32(void *base, void *data)
 	return (uint32_t *)(cb + k);
 }
 
+#if 0
+/* obsolete */
 /*
  * Convert a small vector to fixed point.
  */
@@ -2675,6 +2677,7 @@ poly_small_to_fixed(fnr *x, const int8_t *f, unsigned logn)
 		x[u] = fnr_of(f[u]);
 	}
 }
+#endif
 
 /*
  * Input: f,g of degree N = 2^logn; 'depth' is used only to get their
@@ -4565,22 +4568,22 @@ poly_small_mkgauss(shake_context *rng, int8_t *f, uint32_t q, unsigned logn)
  * Compute the vector w:
  *   w = round(qp*(gamma2*G*adj(g)+F*adj(f))/(gamma2*g*adj(g)+f*adj(f)))
  *
- * Value qp is normally 3329, and gamma2 = (k^2-1)/3 = 1 or 5. All
- * coefficients of w are supposed to fit on signed 13-bit integers (all
- * values should be in -4095..+4095).
+ * Value qp is normally 64513, and gamma2 = (k^2-1)/3 = 1 or 5. All
+ * coefficients of w are supposed to fit on signed 17-bit integers (all
+ * values should be in -65535..+65535).
  *
  * Return value: 1 on success, 0 on error (an error is reported on overflow
  * of any coefficient of w).
  */
 static int
-compute_w(int16_t *w, const int8_t *f, const int8_t *g,
+compute_w(int32_t *w, const int8_t *f, const int8_t *g,
 	const int8_t *F, const int8_t *G, unsigned qp, unsigned gamma2,
 	unsigned logn, uint32_t *tmp)
 {
 	size_t n, u, hn;
 	uint32_t p, p0i, R2, R2g2;
 	uint32_t *gm, *igm, *ft, *gt, *Ft, *Gt, *t1, *t2;
-	fnr *rt1, *rt2;
+	fnr *rt1, *rt2, rslim;
 	int32_t lim1;
 
 	n = (size_t)1 << logn;
@@ -4670,8 +4673,7 @@ compute_w(int16_t *w, const int8_t *f, const int8_t *g,
 	/*
 	 * Convert back numerator and denominator into RNS, then
 	 * fixed-point; we also multiply the numerator by qp. To give
-	 * us some margin, we scaled down both numerator and denominator
-	 * by 10 bits.
+	 * us some margin, we scale down the numerator by 10 bits.
 	 *
 	 * We check that the values are such that the FFT won't overflow.
 	 * We can do a conditional jump for that, since any failure here
@@ -4695,7 +4697,7 @@ compute_w(int16_t *w, const int8_t *f, const int8_t *g,
 		rt1[u] = fnr_of_scaled32(
 			((uint64_t)qp * (uint64_t)v1) << 22);
 		rt2[u] = fnr_of_scaled32(
-			(uint64_t)v2 << 22);
+			(uint64_t)v2 << 32);
 	}
 	bat_FFT(rt1, logn);
 	bat_FFT(rt2, logn);
@@ -4730,16 +4732,22 @@ compute_w(int16_t *w, const int8_t *f, const int8_t *g,
 
 	/*
 	 * Now round all coefficients of w. Check that they all fit
-	 * on signed 13-bit integers.
+	 * in the allowed range (-2^16..+2^16). The coefficients in rt1[]
+	 * are currently scaled down (by 10 bits) so we must first scale
+	 * them up.
 	 */
+	rslim = fnr_of(1 << 6);
 	for (u = 0; u < n; u ++) {
 		int32_t z;
 
-		z = fnr_round(rt1[u]);
-		if (z < -((int32_t)1 << 13) || z > +((int32_t)1 << 13)) {
+		if (!fnr_lt(fnr_abs(rt1[u]), rslim)) {
 			return 0;
 		}
-		w[u] = (int16_t)z;
+		z = fnr_round(fnr_mul_2e(rt1[u], 10));
+		if (z < -((int32_t)1 << 16) || z > +((int32_t)1 << 16)) {
+			return 0;
+		}
+		w[u] = (int32_t)z;
 	}
 
 	return 1;
@@ -4752,7 +4760,7 @@ compute_w(int16_t *w, const int8_t *f, const int8_t *g,
  */
 static uint64_t
 compute_dnorm(const int8_t *f, const int8_t *g,
-	const int8_t *F, const int8_t *G, const int16_t *w,
+	const int8_t *F, const int8_t *G, const int32_t *w,
 	unsigned qp, unsigned gamma2, unsigned logn, uint32_t *tmp)
 {
 	size_t n, u;
@@ -4763,10 +4771,11 @@ compute_dnorm(const int8_t *f, const int8_t *g,
 	/*
 	 * Max values for f and g is 6*(1024/n) (in absolute value);
 	 * coefficients of F and G are less than 2^7, and coefficients
-	 * of w are less than 2^15. Thus, maximum coefficient of
-	 * Fd or Gd is less than n*6*(1024/n)*(2^15) + n*qp*(2^7). With
-	 * qp = 3329, this is less than 2^28. Thus, we can compute Fd and
-	 * Gd with the NTT and a single prime.
+	 * of w are less than 2^16. Thus, maximum absolute value of a
+	 * coefficient of Fd or Gd is n*6*(1024/n)*(2^16-1) +
+	 * qp*(2^7-1). With qp = 64513, this is 410840191. Thus, we
+	 * can compute Fd and Gd with the NTT and a single prime, as long
+	 * as that prime is greater than 821680383.
 	 */
 	n = (size_t)1 << logn;
 	gm = tmp;
@@ -4843,39 +4852,39 @@ compute_dnorm(const int8_t *f, const int8_t *g,
 }
 
 static const uint64_t max_dnorm_128[] = {
-	2007305315,
-	2008511085,
-	2010923710,
-	2015753306,
-	2025429876,
-	2044852526,
-	2083975874,
-	2163334750
+	753412648927,
+	753436005671,
+	753482720245,
+	753576153737,
+	753763038100,
+	754136876336,
+	754884830854,
+	756381852074,
 };
 
 static const uint64_t max_dnorm_257[] = {
-	4030292702,
-	4032713662,
-	4037557762,
-	4047254685,
-	4066683423,
-	4105680463,
-	4184232809,
-	4343570554,
-	4671178262
+	1512711334174,
+	1512758230136,
+	1512852024242,
+	1513039621175,
+	1513414849934,
+	1514165447018,
+	1515667199450,
+	1518672937367,
+	1524693345421,
 };
 
 static const uint64_t max_dnorm_769[] = {
-	24264521259,
-	24282319488,
-	24317935520,
-	24389245886,
-	24532179828,
-	24819300546,
-	25398553321,
-	26577104229,
-	29014387474,
-	34209679678
+	11119929273450,
+	11120274005305,
+	11120963485046,
+	11122342508650,
+	11125100812344,
+	11130618445681,
+	11141657816146,
+	11163752972243,
+	11208008945103,
+	11296783533487,
 };
 
 /* ===================================================================== */
@@ -4889,13 +4898,11 @@ bat_keygen_make_fg(int8_t *f, int8_t *g, uint16_t *h,
 	uint32_t q, unsigned logn,
 	const void *seed, size_t seed_len, uint32_t *tmp)
 {
-	size_t u, n;
+	size_t n;
 	shake_context rng;
 	const char *tag;
 	uint8_t tt;
-	uint32_t norm;
-	fnr *rt1, *rt2, *rt3;
-	fnr bnorm;
+	uint32_t normf, normg, gamma2, bound_norm2_fg;
 
 	n = (size_t)1 << logn;
 
@@ -4942,18 +4949,24 @@ bat_keygen_make_fg(int8_t *f, int8_t *g, uint16_t *h,
 			return 0;
 		}
 		tag = tags_128[logn];
+		gamma2 = 1;
+		bound_norm2_fg = 181;
 		break;
 	case 257:
 		if (logn == 0 || logn > 9) {
 			return 0;
 		}
 		tag = tags_257[logn];
+		gamma2 = 1;
+		bound_norm2_fg = 363;
 		break;
 	case 769:
 		if (logn == 0 || logn > 10) {
 			return 0;
 		}
 		tag = tags_769[logn];
+		gamma2 = 5;
+		bound_norm2_fg = 2671;
 		break;
 	default:
 		return 0;
@@ -4972,41 +4985,15 @@ bat_keygen_make_fg(int8_t *f, int8_t *g, uint16_t *h,
 	}
 
 	/*
-	 * Bound on the squared norm is sqrt(2)*q. Since f and
-	 * g are integral, the squared norm of (g,-f) is an
-	 * integer. The squared norm of a small vector f or g
-	 * cannot go beyond 2^24.
+	 * Bound on the norm of (g, gamma*f) is:
+	 *    sqrt(n) * sigma * sqrt(gamma^2 + 1)
+	 * Since the expression of sigma includes 1/sqrt(n), the value
+	 * of n simplifies away; i.e. the bound depends on q and gamma,
+	 * but not on n.
 	 */
-	norm = poly_small_sqnorm(f, logn) + poly_small_sqnorm(g, logn);
-	if ((uint64_t)norm * norm > 2 * (uint64_t)q * q) {
-		return 0;
-	}
-
-	/*
-	 * We compute the orthogonalized vector norm.
-	 */
-	rt1 = (fnr *)tmp;
-	rt2 = rt1 + n;
-	rt3 = rt2 + n;
-	poly_small_to_fixed(rt1, f, logn);
-	poly_small_to_fixed(rt2, g, logn);
-	bat_FFT(rt1, logn);
-	bat_FFT(rt2, logn);
-	bat_poly_invnorm_fft(rt3, rt1, rt2, 0, logn);
-	bat_poly_adj_fft(rt1, logn);
-	bat_poly_adj_fft(rt2, logn);
-	bat_poly_mulconst(rt1, fnr_of(q), logn);
-	bat_poly_mulconst(rt2, fnr_of(q), logn);
-	bat_poly_mul_autoadj_fft(rt1, rt3, logn);
-	bat_poly_mul_autoadj_fft(rt2, rt3, logn);
-	bat_iFFT(rt1, logn);
-	bat_iFFT(rt2, logn);
-	bnorm = fnr_zero;
-	for (u = 0; u < n; u ++) {
-		bnorm = fnr_add(bnorm, fnr_sqr(rt1[u]));
-		bnorm = fnr_add(bnorm, fnr_sqr(rt2[u]));
-	}
-	if (!fnr_lt(bnorm, fnr_mul(fnr_sqrt2, fnr_of(q)))) {
+	normf = poly_small_sqnorm(f, logn);
+	normg = poly_small_sqnorm(g, logn);
+	if (normg + gamma2 * normf > bound_norm2_fg) {
 		return 0;
 	}
 
@@ -5119,7 +5106,7 @@ bat_keygen_verify_FG(
 
 /* see inner.h */
 int
-bat_keygen_compute_w(int16_t *w, const int8_t *f, const int8_t *g,
+bat_keygen_compute_w(int32_t *w, const int8_t *f, const int8_t *g,
 	const int8_t *F, const int8_t *G, uint32_t q, unsigned logn,
 	uint32_t *tmp)
 {
@@ -5155,17 +5142,78 @@ bat_keygen_compute_w(int16_t *w, const int8_t *f, const int8_t *g,
 	/*
 	 * Compute w. Beware that compute_w() uses the Falcon convention.
 	 */
-	if (!compute_w(w, g, f, G, F, 3329, gamma2, logn, tmp)) {
+	if (!compute_w(w, g, f, G, F, 64513, gamma2, logn, tmp)) {
 		return 0;
 	}
 
 	/*
 	 * Verify that (gamma*Fd, Gd) is small enough.
 	 */
-	dnorm = compute_dnorm(g, f, G, F, w, 3329, gamma2, logn, tmp);
+	dnorm = compute_dnorm(g, f, G, F, w, 64513, gamma2, logn, tmp);
 	if (dnorm > max_dnorm) {
 		return 0;
 	}
 
 	return 1;
 }
+
+#if 0
+/*
+ * Compute Fd = qp*F - f*w, given f, F and w. Used for tests only.
+ */
+void
+bat_make_Fd(int32_t *Fd, const int8_t *f, const int8_t *F, const int32_t *w,
+	unsigned qp, unsigned logn, uint32_t *tmp)
+{
+	size_t n, u;
+	uint32_t *gm, *igm, *t1, *t2, *t3;
+	uint32_t p, p0i, R2;
+
+	/*
+	 * This is similar to compute_dnorm(): we compute modulo a
+	 * single prime, which is large enough.
+	 */
+	n = (size_t)1 << logn;
+	gm = tmp;
+	igm = gm + n;
+	t1 = igm + n;
+	t2 = t1 + n;
+	t3 = t2 + n;
+
+	p = PRIMES[0].p;
+	p0i = modp_ninv31(p);
+	R2 = modp_R2(p, p0i);
+	modp_mkgm(gm, igm, logn, PRIMES[0].g, p, p0i);
+
+	/*
+	 * Load w in t1 and convert it to NTT. Also, convert all elements in
+	 * Montgomery representation.
+	 */
+	for (u = 0; u < n; u ++) {
+		t1[u] = modp_montymul(modp_set(w[u], p), R2, p, p0i);
+	}
+	modp_NTT(t1, gm, logn, p, p0i);
+
+	/*
+	 * Load f in t2 and qp*F in t3 and convert them to NTT.
+	 */
+	for (u = 0; u < n; u ++) {
+		t2[u] = modp_set(f[u], p);
+		t3[u] = modp_set((int32_t)qp * (int32_t)F[u], p);
+	}
+	modp_NTT(t2, gm, logn, p, p0i);
+	modp_NTT(t3, gm, logn, p, p0i);
+
+	/*
+	 * Compute Fd (into t2).
+	 */
+	for (u = 0; u < n; u ++) {
+		t2[u] = modp_sub(t3[u],
+			modp_montymul(t1[u], t2[u], p, p0i), p);
+	}
+	modp_iNTT(t2, igm, logn, p, p0i);
+	for (u = 0; u < n; u ++) {
+		Fd[u] = modp_norm(t2[u], p);
+	}
+}
+#endif

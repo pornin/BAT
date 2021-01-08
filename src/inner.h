@@ -494,7 +494,7 @@ int bat_keygen_verify_FG(
  * Size of tmp[]: 6*n elements (24*n bytes).
  * tmp[] MUST be 64-bit aligned.
  */
-int bat_keygen_compute_w(int16_t *w,
+int bat_keygen_compute_w(int32_t *w,
 	const int8_t *f, const int8_t *g, const int8_t *F, const int8_t *G,
 	uint32_t q, unsigned logn, uint32_t *tmp);
 
@@ -584,8 +584,8 @@ int bat_rebuild_G_769(int8_t *G,
 #define SBUF_LEN(logn)   (((1 << (logn)) + 7) >> 3)
 
 /*
- * Encapsulate: given public key (in h) and a secret value sbuf[]
- * (prepared with bat_seed_to_secret()), generate a ciphertext c.
+ * Encrypt: given public key (in h) and secret polynomial s (in sbuf[]),
+ * produce ciphertext c1 (in c).
  *
  * This function is for q = 128, with logn = 1 to 8. Ciphertext elements
  * are in the -31..+32 range. The function cannot fail, hence it always
@@ -594,12 +594,12 @@ int bat_rebuild_G_769(int8_t *G,
  *
  * Size of tmp[]: 3*n/4 elements (3*n bytes)
  */
-uint32_t bat_encapsulate_128(int8_t *c, const uint8_t *sbuf,
+uint32_t bat_encrypt_128(int8_t *c, const uint8_t *sbuf,
 	const uint8_t *h, unsigned logn, uint32_t *tmp);
 
 /*
- * Encapsulate: given public key (in h) and a secret value sbuf[]
- * (prepared with bat_seed_to_secret()), generate a ciphertext c.
+ * Encrypt: given public key (in h) and secret polynomial s (in sbuf[]),
+ * produce ciphertext c1 (in c).
  *
  * This function is for q = 257, with logn = 1 to 9. Ciphertext elements
  * are in the -64..+64 range. The function cannot fail, hence it always
@@ -607,12 +607,12 @@ uint32_t bat_encapsulate_128(int8_t *c, const uint8_t *sbuf,
  *
  * Size of tmp[]: n elements (4*n bytes).
  */
-uint32_t bat_encapsulate_257(int8_t *c, const uint8_t *sbuf,
+uint32_t bat_encrypt_257(int8_t *c, const uint8_t *sbuf,
 	const uint16_t *h, unsigned logn, uint32_t *tmp);
 
 /*
- * Encapsulate: given public key (in h) and a secret value sbuf[]
- * (prepared with bat_seed_to_secret()), generate a ciphertext c.
+ * Encrypt: given public key (in h) and secret polynomial s (in sbuf[]),
+ * produce ciphertext c1 (in c).
  *
  * This function is for q = 769, with logn = 1 to 10. Ciphertext elements
  * are in the -96..+96 range.
@@ -623,12 +623,12 @@ uint32_t bat_encapsulate_257(int8_t *c, const uint8_t *sbuf,
  *
  * Size of tmp[]: 3*n/4 elements (3*n bytes).
  */
-uint32_t bat_encapsulate_769(int8_t *c, const uint8_t *sbuf,
+uint32_t bat_encrypt_769(int8_t *c, const uint8_t *sbuf,
 	const uint16_t *h, unsigned logn, uint32_t *tmp);
 
 /*
- * Decapsulate: given private key (f,g,F,G,w) and ciphertext c, extract
- * secret s. The shared secret s has length n bits (with n = 2^logn); it
+ * Decrypt: given private key (f,g,F,G,w) and ciphertext c1, extract
+ * secret s. The polynomial s has length n bits (with n = 2^logn); it
  * is returned in sbuf[] (ceil(n/8) bytes; for toy versions with logn <
  * 3, the upper bits of the incomplete byte are set to zero).
  *
@@ -637,17 +637,17 @@ uint32_t bat_encapsulate_769(int8_t *c, const uint8_t *sbuf,
  *
  * Size of tmp[]: 2*n elements (8*n bytes).
  *
- * This function never fails; for proper security, a Fujisaki-Okamoto
- * transform shall be applied to verify that the ciphertext containing
- * this secret is indeed obtained from the seed used for encryption.
+ * This function never fails; for proper security, the caller must obtain
+ * the message m (using the second ciphertext element c2) and check that
+ * encryption of m would indeed yield exactly ciphertext c1.
  */
-void bat_decapsulate_128(uint8_t *sbuf, const int8_t *c,
+void bat_decrypt_128(uint8_t *sbuf, const int8_t *c,
 	const int8_t *f, const int8_t *g, const int8_t *F, const int8_t *G,
-	const int16_t *w, unsigned logn, uint32_t *tmp);
+	const int32_t *w, unsigned logn, uint32_t *tmp);
 
 /*
- * Decapsulate: given private key (f,g,F,G,w) and ciphertext c, extract
- * secret s. The shared secret s has length n bits (with n = 2^logn); it
+ * Decrypt: given private key (f,g,F,G,w) and ciphertext c1, extract
+ * secret s. The polynomial s has length n bits (with n = 2^logn); it
  * is returned in sbuf[] (ceil(n/8) bytes; for toy versions with logn <
  * 3, the upper bits of the incomplete byte are set to zero).
  *
@@ -656,17 +656,17 @@ void bat_decapsulate_128(uint8_t *sbuf, const int8_t *c,
  *
  * Size of tmp[]: 2*n elements (8*n bytes).
  *
- * This function never fails; for proper security, a Fujisaki-Okamoto
- * transform shall be applied to verify that the ciphertext containing
- * this secret is indeed obtained from the seed used for encryption.
+ * This function never fails; for proper security, the caller must obtain
+ * the message m (using the second ciphertext element c2) and check that
+ * encryption of m would indeed yield exactly ciphertext c1.
  */
-void bat_decapsulate_257(uint8_t *sbuf, const int8_t *c,
+void bat_decrypt_257(uint8_t *sbuf, const int8_t *c,
 	const int8_t *f, const int8_t *g, const int8_t *F, const int8_t *G,
-	const int16_t *w, unsigned logn, uint32_t *tmp);
+	const int32_t *w, unsigned logn, uint32_t *tmp);
 
 /*
- * Decapsulate: given private key (f,g,F,G,w) and ciphertext c, extract
- * secret s. The shared secret s has length n bits (with n = 2^logn); it
+ * Decrypt: given private key (f,g,F,G,w) and ciphertext c1, extract
+ * secret s. The polynomial s has length n bits (with n = 2^logn); it
  * is returned in sbuf[] (ceil(n/8) bytes; for toy versions with logn <
  * 3, the upper bits of the incomplete byte are set to zero).
  *
@@ -675,13 +675,13 @@ void bat_decapsulate_257(uint8_t *sbuf, const int8_t *c,
  *
  * Size of tmp[]: 2*n elements (8*n bytes).
  *
- * This function never fails; for proper security, a Fujisaki-Okamoto
- * transform shall be applied to verify that the ciphertext containing
- * this secret is indeed obtained from the seed used for encryption.
+ * This function never fails; for proper security, the caller must obtain
+ * the message m (using the second ciphertext element c2) and check that
+ * encryption of m would indeed yield exactly ciphertext c1.
  */
-void bat_decapsulate_769(uint8_t *sbuf, const int8_t *c,
+void bat_decrypt_769(uint8_t *sbuf, const int8_t *c,
 	const int8_t *f, const int8_t *g, const int8_t *F, const int8_t *G,
-	const int16_t *w, unsigned logn, uint32_t *tmp);
+	const int32_t *w, unsigned logn, uint32_t *tmp);
 
 /*
  * Second phase of decapsulation, performed modulo 769.
@@ -699,7 +699,7 @@ void bat_decapsulate_769(uint8_t *sbuf, const int8_t *c,
  * Size of tmp[]: n elements (4*n bytes).
  */
 void bat_finish_decapsulate_769(uint16_t *cp, uint16_t *cs,
-	const int8_t *f, const int8_t *F, const int16_t *w, unsigned logn,
+	const int8_t *f, const int8_t *F, const int32_t *w, unsigned logn,
 	uint32_t *tmp);
 
 /*
@@ -718,7 +718,7 @@ void bat_finish_decapsulate_769(uint16_t *cp, uint16_t *cs,
  * Size of tmp[]: n elements (4*n bytes).
  */
 void bat_finish_decapsulate_257(uint16_t *cp, uint16_t *cs,
-	const int8_t *f, const int8_t *F, const int16_t *w, unsigned logn,
+	const int8_t *f, const int8_t *F, const int32_t *w, unsigned logn,
 	uint32_t *tmp);
 
 /*
@@ -735,32 +735,36 @@ m257_tomonty(uint32_t x)
 
 /*
  * Explicit reduction and conversion to Montgomery representation modulo
- * 769. This works for inputs x in range 0..11757995.
+ * 769. This works for inputs x in range 0..4244636416.
  */
 static inline uint32_t
 m769_tomonty(uint32_t x)
 {
-	x *= 106117527;
+	x *= 452395775;
+	x = (x >> 16) * 769;
+	x = (x >> 16) + 1;
+	x *= 2016233021;
 	x = (x >> 16) * 769;
 	return (x >> 16) + 1;
 }
 
 /* ====================================================================== */
 /*
- * Computations on polynomials modulo q' = 3329.
+ * Computations on polynomials modulo q' = 64513.
  */
 
 /*
  * Compute d = -a*b mod X^n+1 mod q'
- * Coefficients of source values are plain integers in the -32768..+32767
- * range. Coefficients of output values are normalized in -1664..+1664.
+ * Coefficients of source values are plain integers (for value b, they must
+ * be in the -503109..+503109 range). Coefficients of output values are
+ * normalized in -32256..+32256.
  *
  * Array d[] may overlap, partially or totally, with a[]; however, it
  * MUST NOT overlap with b[].
  *
  * Size of tmp[]: n/2 elements (2*n bytes).
  */
-void bat_polyqp_mulneg(int16_t *d, const int16_t *a, const int16_t *b,
+void bat_polyqp_mulneg(int16_t *d, const int16_t *a, const int32_t *b,
 	unsigned logn, uint32_t *tmp);
 
 /* ====================================================================== */
@@ -851,8 +855,8 @@ dec64le(const void *src)
 }
 
 /*
- * bat_trim_i16_encode() and bat_trim_i16_decode() encode and decode
- * polynomials with signed coefficients (int16_t), using the specified
+ * bat_trim_i32_encode() and bat_trim_i32_decode() encode and decode
+ * polynomials with signed coefficients (int32_t), using the specified
  * number of bits for each coefficient. The number of bits includes the
  * sign bit. Each coefficient x must be such that |x| < 2^(bits-1) (the
  * value -2^(bits-1), though conceptually encodable with two's
@@ -889,9 +893,9 @@ dec64le(const void *src)
  * values and bits.
  */
 
-size_t bat_trim_i16_encode(void *out, size_t max_out_len,
-	const int16_t *x, unsigned logn, unsigned bits);
-size_t bat_trim_i16_decode(int16_t *x, unsigned logn, unsigned bits,
+size_t bat_trim_i32_encode(void *out, size_t max_out_len,
+	const int32_t *x, unsigned logn, unsigned bits);
+size_t bat_trim_i32_decode(int32_t *x, unsigned logn, unsigned bits,
 	const void *in, size_t max_in_len);
 size_t bat_trim_i8_encode(void *out, size_t max_out_len,
 	const int8_t *x, unsigned logn, unsigned bits);

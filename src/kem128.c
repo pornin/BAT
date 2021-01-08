@@ -418,7 +418,7 @@ bat_make_public_128(uint8_t *h, const int8_t *f, const int8_t *g,
 
 /* see inner.h */
 uint32_t
-bat_encapsulate_128(int8_t *c, const uint8_t *sbuf,
+bat_encrypt_128(int8_t *c, const uint8_t *sbuf,
 	const uint8_t *h, unsigned logn, uint32_t *tmp)
 {
 	size_t u, n;
@@ -460,9 +460,9 @@ bat_encapsulate_128(int8_t *c, const uint8_t *sbuf,
 
 /* see inner.h */
 void
-bat_decapsulate_128(uint8_t *sbuf, const int8_t *c,
+bat_decrypt_128(uint8_t *sbuf, const int8_t *c,
 	const int8_t *f, const int8_t *g, const int8_t *F, const int8_t *G,
-	const int16_t *w, unsigned logn, uint32_t *tmp)
+	const int32_t *w, unsigned logn, uint32_t *tmp)
 {
 	/*
 	 * q = 128, Q = 2, q' = 3329, k = 2.
@@ -517,7 +517,7 @@ bat_decapsulate_128(uint8_t *sbuf, const int8_t *c,
 	mq_poly_add(t3, (const uint8_t *)F, (const uint8_t *)G, logn);
 	mq_poly_mul_ones(t3, t3, logn);
 	mq_poly_sub(t2, t2, t3, logn);
-	mq_poly_mulconst(t2, t2, 3329 & 0xFF, logn);
+	mq_poly_mulconst(t2, t2, 64513 & 0xFF, logn);
 	for (u = 0; u < n; u ++) {
 		t3[u] = (uint8_t)w[u];
 	}
@@ -538,7 +538,7 @@ bat_decapsulate_128(uint8_t *sbuf, const int8_t *c,
 	 * At that point, we have:
 	 *   t1:  c' mod q*Q   (0..255)
 	 *   t2:  c'' mod q*Q  (0..255)
-	 *   tw3: c'' mod q'   (-1664..+1664)
+	 *   tw3: c'' mod q'   (-32256..+32256)
 	 *
 	 * We now want to assemble c'' mod 257 in tw3. We do so by
 	 * applying the CRT between t2 and tw3.
@@ -550,11 +550,11 @@ bat_decapsulate_128(uint8_t *sbuf, const int8_t *c,
 
 		/*
 		 * We ensure that we get a positive value by adding
-		 * 3329 to the coefficient from c''.
+		 * 64513 to the coefficient from c''.
 		 */
 		x0 = t2[u];
 		z = tw3[u];
-		x1 = (uint32_t)(*(int16_t *)&z + 3329);
+		x1 = (uint32_t)(*(int16_t *)&z + 64513);
 
 		/*
 		 * CRT reconstruction: If:
@@ -562,23 +562,23 @@ bat_decapsulate_128(uint8_t *sbuf, const int8_t *c,
 		 *   x = x1 mod q'
 		 * then:
 		 *   x = ((1/q') * (x0 - x1) mod q*Q) * q' + x1
-		 * We have q*Q = 256; since 3329 = 13*256 + 1, the value
+		 * We have q*Q = 256; since 64513 = 252*256 + 1, the value
 		 * 1/q' mod q*Q is trivial.
 		 */
-		x = x1 + ((x0 - x1) & 0xFF) * 3329;
+		x = x1 + ((x0 - x1) & 0xFF) * 64513;
 
 		/*
-		 * x is in 0..852223; we should normalize it to
-		 * -426112..+426112.
+		 * x is in 0..16515327; we should normalize it to
+		 * -8257663..+8257664.
 		 */
-		y = (int32_t)x
-			- (int32_t)(852224u & -((uint32_t)(426112 - x) >> 31));
+		y = (int32_t)x - (int32_t)(16515328
+			& -((uint32_t)(8257664 - x) >> 31));
 
 		/*
 		 * For reduction modulo 257, we ensure a positive value by
-		 * adding 1659*257 = 426363.
+		 * adding 32131*257 = 8257667.
 		 */
-		tw3[u] = m257_tomonty((uint32_t)(y + 426363));
+		tw3[u] = m257_tomonty((uint32_t)(y + 8257667));
 	}
 
 	/*
@@ -608,8 +608,8 @@ bat_decapsulate_128(uint8_t *sbuf, const int8_t *c,
 	 * q*q'*Q*s' in tw1[], in Montgomery representation modulo 257:
 	 *
 	 *    s'   s   tw1[]
-	 *  -1/2   0    251     (-q*q'*Q/2 = 251 mod 257)
-	 *  +1/2   1      6     (+q*q'*Q/2 = 6 mod 257)
+	 *  -1/2   0      3     (-q*q'*Q/2 = 3 mod 257)
+	 *  +1/2   1    254     (+q*q'*Q/2 = 254 mod 257)
 	 *
 	 * Thus, we just need to look at the least significant bit of each
 	 * value in tw1[] to get the coefficients of s.

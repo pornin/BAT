@@ -1904,7 +1904,7 @@ test_kem_inner_spec(uint32_t q, unsigned logn)
 	} tmp;
 	int8_t f[1024], g[1024], F[1024], G[1024], G2[1024], c[1024];
 	uint16_t h[1024];
-	int16_t w[1024];
+	int32_t w[1024];
 	int enc_fail;
 
 	printf("[%u-%u]", (unsigned)q, 1u << logn);
@@ -1995,16 +1995,16 @@ test_kem_inner_spec(uint32_t q, unsigned logn)
 				prep_tmp(tmp.w, sizeof tmp.w, i);
 				switch (q) {
 				case 128:
-					r = bat_encapsulate_128(
+					r = bat_encrypt_128(
 						c, sbuf, (const uint8_t *)h,
 						logn, tmp.w);
 					break;
 				case 257:
-					r = bat_encapsulate_257(
+					r = bat_encrypt_257(
 						c, sbuf, h, logn, tmp.w);
 					break;
 				case 769:
-					r = bat_encapsulate_769(
+					r = bat_encrypt_769(
 						c, sbuf, h, logn, tmp.w);
 					break;
 				default:
@@ -2012,7 +2012,7 @@ test_kem_inner_spec(uint32_t q, unsigned logn)
 						"Unknown q: %u\n", (unsigned)q);
 					exit(EXIT_FAILURE);
 				}
-				check_tmp_used("bat_encapsulate",
+				check_tmp_used("bat_encrypt",
 					tmp.w, sizeof tmp.w, i,
 					(q == 128 ? 3u : 4u) << logn);
 				if (!r) {
@@ -2025,7 +2025,7 @@ test_kem_inner_spec(uint32_t q, unsigned logn)
 						continue;
 					}
 					fprintf(stderr,
-						"bat_encapsulate() failed\n");
+						"bat_encrypt() failed\n");
 					exit(EXIT_FAILURE);
 				}
 				break;
@@ -2034,22 +2034,22 @@ test_kem_inner_spec(uint32_t q, unsigned logn)
 			prep_tmp(tmp.w, sizeof tmp.w, i);
 			switch (q) {
 			case 128:
-				bat_decapsulate_128(sbuf2,
+				bat_decrypt_128(sbuf2,
 					c, f, g, F, G, w, logn, tmp.w);
 				break;
 			case 257:
-				bat_decapsulate_257(sbuf2,
+				bat_decrypt_257(sbuf2,
 					c, f, g, F, G, w, logn, tmp.w);
 				break;
 			case 769:
-				bat_decapsulate_769(sbuf2,
+				bat_decrypt_769(sbuf2,
 					c, f, g, F, G, w, logn, tmp.w);
 				break;
 			default:
 				fprintf(stderr, "Unknown q: %u\n", (unsigned)q);
 				exit(EXIT_FAILURE);
 			}
-			check_tmp_used("bat_decapsulate",
+			check_tmp_used("bat_decrypt",
 				tmp.w, sizeof tmp.w, i, 8u << logn);
 
 			check_equals(sbuf, sbuf2, SBUF_LEN(logn),
@@ -2521,6 +2521,190 @@ test_kem_769_1024(void)
 	printf(" done.\n");
 	fflush(stdout);
 }
+
+#if 0
+/*
+ * Sample code to generate key pairs and print them out in text format
+ * for external analysis. Each output line contains f, g, Fd and Gd.
+ */
+
+/* defined in keygen.c */
+void bat_make_Fd(int32_t *Fd, const int8_t *f, const int8_t *F,
+	const int32_t *w, unsigned qp, unsigned logn, uint32_t *tmp);
+
+static void
+make_keys(uint32_t q, unsigned logn, int num)
+{
+	int i;
+	union {
+		uint8_t b[24 * 1024 + 8];
+		uint32_t w[6 * 1024 + 2];
+		uint64_t d;
+	} tmp;
+	int8_t f[1024], g[1024], F[1024], G[1024];
+	uint16_t h[1024];
+	int32_t w[1024], Fd[1024], Gd[1024];
+
+	for (i = 0; i < num; i ++) {
+		shake_context rng;
+		uint8_t kg_seed[32];
+		size_t u, n;
+
+		rand_init(&rng, "make_keys",
+			((uint64_t)(q << 4 | logn) << 32) | (uint64_t)i);
+
+		/*
+		 * Generate a new key pair.
+		 */
+		for (;;) {
+			int r;
+
+			shake_extract(&rng, kg_seed, sizeof kg_seed);
+			r = bat_keygen_make_fg(f, g, h, q, logn,
+				kg_seed, sizeof kg_seed, tmp.w);
+			if (!r) {
+				continue;
+			}
+
+			r = bat_keygen_solve_FG(F, G, f, g, q, logn, tmp.w);
+			if (!r) {
+				continue;
+			}
+
+			r = bat_keygen_compute_w(w, f, g, F, G, q, logn, tmp.w);
+			if (!r) {
+				continue;
+			}
+
+			break;
+		}
+		bat_make_Fd(Fd, f, F, w, 64513, logn, tmp.w);
+		bat_make_Fd(Gd, g, G, w, 64513, logn, tmp.w);
+
+		fprintf(stderr, ".");
+		fflush(stderr);
+
+		n = 1u << logn;
+		printf("[[");
+		for (u = 0; u < n; u ++) {
+			if (u != 0) {
+				printf(", ");
+			}
+			printf("%d", f[u]);
+		}
+		printf("], [");
+		for (u = 0; u < n; u ++) {
+			if (u != 0) {
+				printf(", ");
+			}
+			printf("%d", g[u]);
+		}
+		printf("], [");
+		for (u = 0; u < n; u ++) {
+			if (u != 0) {
+				printf(", ");
+			}
+			printf("%d", Fd[u]);
+		}
+		printf("], [");
+		for (u = 0; u < n; u ++) {
+			if (u != 0) {
+				printf(", ");
+			}
+			printf("%d", Gd[u]);
+		}
+		printf("]]\n");
+		fflush(stdout);
+	}
+	fprintf(stderr, "\n");
+	fflush(stderr);
+}
+#endif
+
+#if 0
+/*
+ * Sample code to generate key pairs and export them in a custom binary
+ * format for external analysis. Polynomials f, g, F and G use one byte
+ * per coefficient; w uses 4 bytes per coefficient (little-endian). Keys
+ * are written one after the other in the specified file.
+ */
+
+static void
+make_keys_bin(const char *fname, uint32_t q, unsigned logn, int num)
+{
+	int i;
+	union {
+		uint8_t b[24 * 1024 + 8];
+		uint32_t w[6 * 1024 + 2];
+		uint64_t d;
+	} tmp;
+	int8_t f[1024], g[1024], F[1024], G[1024];
+	uint16_t h[1024];
+	int32_t w[1024];
+	FILE *kf;
+
+	kf = fopen(fname, "wb");
+	if (kf == NULL) {
+		perror("fopen");
+		exit(EXIT_FAILURE);
+	}
+	for (i = 0; i < num; i ++) {
+		shake_context rng;
+		uint8_t kg_seed[32];
+		size_t u, n;
+
+		rand_init(&rng, "make_keys_bin",
+			((uint64_t)(q << 4 | logn) << 32) | (uint64_t)i);
+
+		/*
+		 * Generate a new key pair.
+		 */
+		for (;;) {
+			int r;
+
+			shake_extract(&rng, kg_seed, sizeof kg_seed);
+			r = bat_keygen_make_fg(f, g, h, q, logn,
+				kg_seed, sizeof kg_seed, tmp.w);
+			if (!r) {
+				continue;
+			}
+
+			r = bat_keygen_solve_FG(F, G, f, g, q, logn, tmp.w);
+			if (!r) {
+				continue;
+			}
+
+			r = bat_keygen_compute_w(w, f, g, F, G, q, logn, tmp.w);
+			if (!r) {
+				continue;
+			}
+
+			break;
+		}
+
+		n = 1u << logn;
+		fwrite(f, 1, n, kf);
+		fwrite(g, 1, n, kf);
+		fwrite(F, 1, n, kf);
+		fwrite(G, 1, n, kf);
+		for (u = 0; u < n; u ++) {
+			uint8_t tbuf[4];
+
+			enc32le(tbuf, w[u]);
+			fwrite(tbuf, 1, 4, kf);
+		}
+
+		if ((i + 1) % 100 == 0) {
+			fprintf(stderr, ".");
+			fflush(stderr);
+		}
+	}
+	fprintf(stderr, "\n");
+	fflush(stderr);
+
+	fclose(kf);
+}
+#endif
 
 int
 main(void)

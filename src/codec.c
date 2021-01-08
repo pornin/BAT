@@ -33,23 +33,23 @@ const uint8_t bat_max_FG_bits[] = {
 /* see inner.h */
 const uint8_t bat_max_w_bits[] = {
 	0, /* unused */
-	13,
-	13,
-	13,
-	13,
-	13,
-	13,
-	13,
-	13,
-	13,
-	13
+	17,
+	17,
+	17,
+	17,
+	17,
+	17,
+	17,
+	17,
+	17,
+	17
 };
 
 /* see inner.h */
 size_t
-bat_trim_i16_encode(
+bat_trim_i32_encode(
 	void *out, size_t max_out_len,
-	const int16_t *x, unsigned logn, unsigned bits)
+	const int32_t *x, unsigned logn, unsigned bits)
 {
 	size_t n, u, out_len;
 	uint8_t *buf;
@@ -69,7 +69,7 @@ bat_trim_i16_encode(
 	acc_len = 0;
 	mask = ((uint32_t)1 << bits) - 1;
 	for (u = 0; u < n; u ++) {
-		acc = (acc << bits) | ((uint16_t)x[u] & mask);
+		acc = (acc << bits) | ((uint32_t)x[u] & mask);
 		acc_len += bits;
 		while (acc_len >= 8) {
 			acc_len -= 8;
@@ -84,8 +84,8 @@ bat_trim_i16_encode(
 
 /* see inner.h */
 size_t
-bat_trim_i16_decode(
-	int16_t *x, unsigned logn, unsigned bits,
+bat_trim_i32_decode(
+	int32_t *x, unsigned logn, unsigned bits,
 	const void *in, size_t max_in_len)
 {
 	size_t n, in_len;
@@ -116,7 +116,7 @@ bat_trim_i16_decode(
 			acc_len -= bits;
 			w = (acc >> acc_len) & mask1;
 			w |= -(w & mask2);
-			x[u ++] = (int16_t)*(int32_t *)&w;
+			x[u ++] = *(int32_t *)&w;
 
 			/* Value w == -mask2 is forbidden. */
 			q = w + mask2;

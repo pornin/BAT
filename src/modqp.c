@@ -1,11 +1,11 @@
 #include "inner.h"
 
-#define Q   3329
+#define Q   64513
 #include "modgen.c"
 
 /* see inner.h */
 void
-bat_polyqp_mulneg(int16_t *d, const int16_t *a, const int16_t *b,
+bat_polyqp_mulneg(int16_t *d, const int16_t *a, const int32_t *b,
 	unsigned logn, uint32_t *tmp)
 {
 	size_t u, n;

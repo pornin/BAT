@@ -57,14 +57,32 @@
 #define T54          276
 #define T25         1441
 #define T25iGM1     1932
+#elif Q == 64513
+#define Q1I   3354459135
+#define Q1Ilo      -1025
+#define Q1Ihi     -14352
+#define R          14321
+#define R2          4214
+#define T54        57083
+#define T25         7672
+#define T25iGM1    22387
 #else
 #error Unsupported modulus Q.
 #endif
 
 /*
- * Square of Q, as a uint32_t.
+ * Square of q, as a uint32_t.
  */
 #define Q2   ((uint32_t)((uint32_t)Q * (uint32_t)Q))
+
+/*
+ * q as a 16-bit signed integer (for use with AVX2 intrinsics).
+ */
+#if Q < 32767
+#define Qs   Q
+#else
+#define Qs   (Q - 65536)
+#endif
 
 #else
 #error This module must not be compiled separately.
@@ -93,12 +111,70 @@ mq_add(uint32_t x, uint32_t y)
 	return Q - x;
 }
 
+UNUSED
+static inline uint32_t
+mq_mul2(uint32_t x)
+{
+	/* Compute -2*x in the -q..q-2 range. */
+	x = Q - (x << 1);
+
+	/* Add q if the value is strictly negative. Note that since
+	   x <= q, a negative value will have its top 16 bits all equal to 1. */
+	x += Q & (x >> 16);
+
+	/* Since we have -2*x in the 0..q-1 range, we can get
+	   2*x = -(-2*x) in the 1..q range. */
+	return Q - x;
+}
+
 #if BAT_AVX2
+
+/*
+ * Set an AVX2 mask for parallel comparison of 16 _unsigned_ values.
+ */
+UNUSED TARGET_AVX2
+static inline __m256i
+cmpgtu_x16(__m256i x, __m256i y)
+{
+	__m256i m = _mm256_set1_epi16(-32768);
+
+	return _mm256_cmpgt_epi16(
+		_mm256_add_epi16(x, m),
+		_mm256_add_epi16(y, m));
+}
+
+/*
+ * Parallel addition of 16 unsigned values (of 16 bits each). Output d is
+ * filled with a + b; value c is 0xFFFF if there is a carry, 0 otherwise.
+ */
+#define ADD_x16(d, c, a, b)   do { \
+		__m256i add_a = (a); \
+		__m256i add_b = (b); \
+		__m256i add_d; \
+		add_d = _mm256_add_epi16(add_a, add_b); \
+		(c) = cmpgtu_x16(add_a, add_d); \
+		(d) = add_d; \
+	} while (0)
+
+/*
+ * Parallel subtraction of 16 unsigned values (of 16 bits each). Output d is
+ * filled with a + b; value c is 0xFFFF is there is a borrow, 0 otherwise.
+ */
+#define SUB_x16(d, c, a, b)   do { \
+		__m256i sub_a = (a); \
+		__m256i sub_b = (b); \
+		__m256i sub_d; \
+		sub_d = _mm256_sub_epi16(sub_a, sub_b); \
+		(c) = cmpgtu_x16(sub_d, sub_a); \
+		(d) = sub_d; \
+	} while (0)
+
 UNUSED TARGET_AVX2
 static inline __m256i
 mq_add_x16(__m256i x, __m256i y)
 {
-	__m256i Qx16 = _mm256_set1_epi16(Q);
+#if Q < 32768
+	__m256i Qx16 = _mm256_set1_epi16(Qs);
 
 	x = _mm256_sub_epi16(
 		Qx16,
@@ -109,7 +185,25 @@ mq_add_x16(__m256i x, __m256i y)
 			Qx16,
 			_mm256_srai_epi16(x, 15)));
 	return _mm256_sub_epi16(Qx16, x);
+#else
+	__m256i Qx16 = _mm256_set1_epi16(Qs);
+	__m256i c, d;
+
+	/* Compute x + y; if there is a carry or the result is greater
+	   than q, then we subtract q. */
+	ADD_x16(d, c, x, y);
+	return _mm256_sub_epi16(d, _mm256_and_si256(
+		_mm256_or_si256(c, cmpgtu_x16(d, Qx16)), Qx16));
+#endif
 }
+
+UNUSED TARGET_AVX2
+static inline __m256i
+mq_mul2_x16(__m256i x)
+{
+	return mq_add_x16(x, x);
+}
+
 #endif
 
 UNUSED
@@ -131,7 +225,8 @@ UNUSED TARGET_AVX2
 static inline __m256i
 mq_sub_x16(__m256i x, __m256i y)
 {
-	__m256i Qx16 = _mm256_set1_epi16(Q);
+#if Q < 32768
+	__m256i Qx16 = _mm256_set1_epi16(Qs);
 
 	y = _mm256_sub_epi16(y, x);
 	y = _mm256_add_epi16(
@@ -140,21 +235,41 @@ mq_sub_x16(__m256i x, __m256i y)
 			Qx16,
 			_mm256_srai_epi16(y, 15)));
 	return _mm256_sub_epi16(Qx16, y);
+#else
+	__m256i Qx16 = _mm256_set1_epi16(Qs);
+	__m256i c, d;
+
+	/* Compute x - y; if there is a borrow or the result is zero,
+	   then we add q. */
+	SUB_x16(d, c, x, y);
+	return _mm256_add_epi16(d, _mm256_and_si256(
+		_mm256_or_si256(c,
+			_mm256_cmpeq_epi16(d, _mm256_setzero_si256())),
+		Qx16));
+#endif
 }
 
+#if Q < 19433
 UNUSED TARGET_AVX2
 static inline __m256i
 negx16(__m256i x)
 {
 	return _mm256_sub_epi16(_mm256_set1_epi16(2 * Q), x);
 }
+#else
+#define negx16   mq_neg_x16
+#endif
 
+#if Q < 19433
 UNUSED TARGET_AVX2
 static inline __m256i
 mul2x16(__m256i x)
 {
 	return _mm256_add_epi16(x, x);
 }
+#else
+#define mul2x16   mq_mul2_x16
+#endif
 
 #endif
 
@@ -172,42 +287,52 @@ UNUSED TARGET_AVX2
 static inline __m256i
 mq_neg_x16(__m256i x)
 {
-	__m256i Qx16 = _mm256_set1_epi16(Q);
+	__m256i Qx16 = _mm256_set1_epi16(Qs);
 
 	x = _mm256_sub_epi16(Qx16, x);
-	x = _mm256_add_epi16(
-		x,
-		_mm256_and_si256(
-			Qx16,
-			_mm256_srai_epi16(
-				_mm256_sub_epi16(
-					x,
-					_mm256_set1_epi16(1)),
-				15)));
-	return x;
+	return _mm256_or_si256(x, _mm256_and_si256(
+		_mm256_cmpeq_epi16(x, _mm256_setzero_si256()), Qx16));
 }
 #endif
 
 /*
  * Given input x, compute x/2^32 modulo q. Returned value is in the 1..q
- * range. This function works for all 1 <= x <= 2^32 + 2^16 - 1 - (2^16-1)*q.
+ * range.
+ *
+ * IF q <= 40504:
+ * ==============
+ *
+ * This function works for all 1 <= x <= 2^32 + 2^16 - 1 - (2^16-1)*q.
  * The upper limit is, for the supported values of q:
  *     q      limit
  *    257   4278190336
  *    769   4244636416
  *   3329   4076866816
- * Note that, for all values of q, the upper limit is greater than 360*q^2.
- * Therefore, when computing a sum of Montgomery products of values, we
- * can perform a sum of plain product and perform a single Montgomery
- * reduction at the end.
+ * If q <= 19433, then the limit is greater than 8*q^2, so that we may
+ * then add together up to 8 simple products (over the integers) in order
+ * to mutualize the Montgomery reduction.
+ *
+ * IF q > 40504:
+ * =============
+ *
+ * When q is larger than 40504, the validity range of the method above is
+ * lower than q^2, which means that it is not sufficient to implement
+ * multiplications. In that case, the function below uses a different
+ * technique which involves a 32x32->64 multiplication, but works for all
+ * values in the 1..2^32-1 range.
  */
 UNUSED
 static inline uint32_t
 mq_montyred(uint32_t x)
 {
+#if Q <= 40504
 	x *= Q1I;
 	x = (x >> 16) * Q;
 	return (x >> 16) + 1;
+#else
+	x *= Q1I;
+	return (uint32_t)(((uint64_t)x * Q) >> 32) + 1;
+#endif
 }
 
 #if BAT_AVX2
@@ -215,7 +340,8 @@ UNUSED TARGET_AVX2
 static inline __m256i
 mq_montyred_x16(__m256i lo, __m256i hi)
 {
-	__m256i Qx16 = _mm256_set1_epi16(Q);
+#if Q < 32768
+	__m256i Qx16 = _mm256_set1_epi16(Qs);
 	__m256i Q1Ilox16 = _mm256_set1_epi16(Q1Ilo);
 	__m256i Q1Ihix16 = _mm256_set1_epi16(Q1Ihi);
 	__m256i x;
@@ -243,6 +369,37 @@ mq_montyred_x16(__m256i lo, __m256i hi)
 	 * Result is x + 1.
 	 */
 	return _mm256_add_epi16(x, _mm256_set1_epi16(1));
+#else
+	__m256i Qx16 = _mm256_set1_epi16(Qs);
+	__m256i Q1Ilox16 = _mm256_set1_epi16(Q1Ilo);
+	__m256i Q1Ihix16 = _mm256_set1_epi16(Q1Ihi);
+	__m256i xl, xh, c, d, e;
+
+	/*
+	 * Multiply input x (lo:hi) by Q1I, result into xl:xh.
+	 */
+	xl = _mm256_mullo_epi16(lo, Q1Ilox16);
+	xh = _mm256_add_epi16(
+		_mm256_add_epi16(
+			_mm256_mullo_epi16(lo, Q1Ihix16),
+			_mm256_mullo_epi16(hi, Q1Ilox16)),
+		_mm256_mulhi_epu16(lo, Q1Ilox16));
+
+	/*
+	 * Multiply xl:xh by q; we only need the top third of the 48-bit
+	 * values.
+	 */
+	ADD_x16(d, c,
+		_mm256_mulhi_epu16(xl, Qx16),
+		_mm256_mullo_epi16(xh, Qx16));
+	(void)d;
+	e = _mm256_sub_epi16(_mm256_mulhi_epu16(xh, Qx16), c);
+
+	/*
+	 * Add 1 (carry from low 32 bits through Montgomery reduction).
+	 */
+	return _mm256_add_epi16(e, _mm256_set1_epi16(1));
+#endif
 }
 #endif
 
@@ -269,6 +426,14 @@ mq_montymul_x16(__m256i x, __m256i y)
 #endif
 
 #if BAT_AVX2
+
+/*
+ * If q <= 19433, then we can compute a sum of up to eight products by
+ * doing the computation over plain integers (32 bits) and applying a
+ * single Montgomery reduction. Otherwise, we need to do independent
+ * Montgomery reduction.
+ */
+#if Q <= 19433
 
 #define MUL_16to32(u0, u1, a, b)   do { \
 		__m256i t_mul_16to32_a = (a); \
@@ -477,6 +642,127 @@ mq_montyLC8_x16(__m256i a0, __m256i b0, __m256i a1, __m256i b1,
 	return mq_montyred_x16(lo, hi);
 }
 
+#else
+
+UNUSED TARGET_AVX2
+static inline __m256i
+mq_montyLC2_x16(__m256i a0, __m256i b0, __m256i a1, __m256i b1)
+{
+	return mq_add_x16(
+		mq_montymul_x16(a0, b0),
+		mq_montymul_x16(a1, b1));
+}
+
+UNUSED TARGET_AVX2
+static inline __m256i
+mq_montyLC3_x16(__m256i a0, __m256i b0, __m256i a1, __m256i b1,
+	__m256i a2, __m256i b2)
+{
+	return mq_add_x16(
+		mq_add_x16(
+			mq_montymul_x16(a0, b0),
+			mq_montymul_x16(a1, b1)),
+		mq_montymul_x16(a2, b2));
+}
+
+UNUSED TARGET_AVX2
+static inline __m256i
+mq_montyLC4_x16(__m256i a0, __m256i b0, __m256i a1, __m256i b1,
+	__m256i a2, __m256i b2, __m256i a3, __m256i b3)
+{
+	return mq_add_x16(
+		mq_add_x16(
+			mq_montymul_x16(a0, b0),
+			mq_montymul_x16(a1, b1)),
+		mq_add_x16(
+			mq_montymul_x16(a2, b2),
+			mq_montymul_x16(a3, b3)));
+}
+
+UNUSED TARGET_AVX2
+static inline __m256i
+mq_montyLC5_x16(__m256i a0, __m256i b0, __m256i a1, __m256i b1,
+	__m256i a2, __m256i b2, __m256i a3, __m256i b3,
+	__m256i a4, __m256i b4)
+{
+	return mq_add_x16(
+		mq_add_x16(
+			mq_add_x16(
+				mq_montymul_x16(a0, b0),
+				mq_montymul_x16(a1, b1)),
+			mq_add_x16(
+				mq_montymul_x16(a2, b2),
+				mq_montymul_x16(a3, b3))),
+		mq_montymul_x16(a4, b4));
+}
+
+UNUSED TARGET_AVX2
+static inline __m256i
+mq_montyLC6_x16(__m256i a0, __m256i b0, __m256i a1, __m256i b1,
+	__m256i a2, __m256i b2, __m256i a3, __m256i b3,
+	__m256i a4, __m256i b4, __m256i a5, __m256i b5)
+{
+	return mq_add_x16(
+		mq_add_x16(
+			mq_add_x16(
+				mq_montymul_x16(a0, b0),
+				mq_montymul_x16(a1, b1)),
+			mq_add_x16(
+				mq_montymul_x16(a2, b2),
+				mq_montymul_x16(a3, b3))),
+		mq_add_x16(
+			mq_montymul_x16(a4, b4),
+			mq_montymul_x16(a5, b5)));
+}
+
+UNUSED TARGET_AVX2
+static inline __m256i
+mq_montyLC7_x16(__m256i a0, __m256i b0, __m256i a1, __m256i b1,
+	__m256i a2, __m256i b2, __m256i a3, __m256i b3,
+	__m256i a4, __m256i b4, __m256i a5, __m256i b5,
+	__m256i a6, __m256i b6)
+{
+	return mq_add_x16(
+		mq_add_x16(
+			mq_add_x16(
+				mq_montymul_x16(a0, b0),
+				mq_montymul_x16(a1, b1)),
+			mq_add_x16(
+				mq_montymul_x16(a2, b2),
+				mq_montymul_x16(a3, b3))),
+		mq_add_x16(
+			mq_add_x16(
+				mq_montymul_x16(a4, b4),
+				mq_montymul_x16(a5, b5)),
+			mq_montymul_x16(a6, b6)));
+}
+
+UNUSED TARGET_AVX2
+static inline __m256i
+mq_montyLC8_x16(__m256i a0, __m256i b0, __m256i a1, __m256i b1,
+	__m256i a2, __m256i b2, __m256i a3, __m256i b3,
+	__m256i a4, __m256i b4, __m256i a5, __m256i b5,
+	__m256i a6, __m256i b6, __m256i a7, __m256i b7)
+{
+	return mq_add_x16(
+		mq_add_x16(
+			mq_add_x16(
+				mq_montymul_x16(a0, b0),
+				mq_montymul_x16(a1, b1)),
+			mq_add_x16(
+				mq_montymul_x16(a2, b2),
+				mq_montymul_x16(a3, b3))),
+		mq_add_x16(
+			mq_add_x16(
+				mq_montymul_x16(a4, b4),
+				mq_montymul_x16(a5, b5)),
+			mq_add_x16(
+				mq_montymul_x16(a6, b6),
+				mq_montymul_x16(a7, b7))));
+}
+
+#endif
+
 #endif
 
 /*
@@ -486,6 +772,7 @@ mq_montyLC8_x16(__m256i a0, __m256i b0, __m256i a1, __m256i b1,
  *    257   4278190079
  *    769     11757226
  *   3329      1361084
+ *  64513       954700
  */
 UNUSED
 static inline uint32_t
@@ -495,15 +782,15 @@ mq_tomonty(uint32_t x)
 }
 
 /*
- * Given a signed integer x (in the -32768..+32767 range), obtain the
+ * Given a signed integer x (in the -503109..+503109 range), obtain the
  * Montgomery representation of x (i.e. x*2^32 mod q, in the 1..q range).
  */
 UNUSED
 static inline uint32_t
-mq_set(int x)
+mq_set(int32_t x)
 {
 	return mq_montyred((uint32_t)((int32_t)x
-		+ (int32_t)Q * (1 + ((int32_t)32768 / Q))) * R2);
+		+ (int32_t)Q * (1 + ((int32_t)503109 / Q))) * R2);
 }
 
 /*
@@ -610,6 +897,33 @@ mq_inv(uint32_t x)
 
 	return x;
 
+#elif Q == 64513
+
+	uint32_t y, x3, x31;
+
+	y = mq_montymul(x, x);      /* x^2 */
+	x3 = mq_montymul(y, x);     /* x^3 */
+	y = mq_montymul(x3, x3);    /* x^6 */
+	y = mq_montymul(y, y);      /* x^12 */
+	y = mq_montymul(y, x3);     /* x^15 */
+	y = mq_montymul(y, y);      /* x^30 */
+	x31 = mq_montymul(y, x);    /* x^31 */
+	y = mq_montymul(x31, x31);  /* x^62 */
+	y = mq_montymul(y, y);      /* x^124 */
+	y = mq_montymul(y, y);      /* x^248 */
+	y = mq_montymul(y, y);      /* x^496 */
+	y = mq_montymul(y, y);      /* x^992 */
+	y = mq_montymul(y, y);      /* x^1984 */
+	y = mq_montymul(y, x31);    /* x^2015 */
+	y = mq_montymul(y, y);      /* x^4030 */
+	y = mq_montymul(y, y);      /* x^8060 */
+	y = mq_montymul(y, y);      /* x^16120 */
+	y = mq_montymul(y, y);      /* x^32240 */
+	y = mq_montymul(y, y);      /* x^64480 */
+	y = mq_montymul(y, x31);    /* x^64511 */
+
+	return y;
+
 #endif
 }
 
@@ -692,6 +1006,33 @@ mq_inv_x16(__m256i x)
 	x = mq_montymul_x16(x, x9);      /* x^3327 = 1/x */
 
 	return x;
+
+#elif Q == 64513
+
+	__m256i y, x3, x31;
+
+	y = mq_montymul_x16(x, x);      /* x^2 */
+	x3 = mq_montymul_x16(y, x);     /* x^3 */
+	y = mq_montymul_x16(x3, x3);    /* x^6 */
+	y = mq_montymul_x16(y, y);      /* x^12 */
+	y = mq_montymul_x16(y, x3);     /* x^15 */
+	y = mq_montymul_x16(y, y);      /* x^30 */
+	x31 = mq_montymul_x16(y, x);    /* x^31 */
+	y = mq_montymul_x16(x31, x31);  /* x^62 */
+	y = mq_montymul_x16(y, y);      /* x^124 */
+	y = mq_montymul_x16(y, y);      /* x^248 */
+	y = mq_montymul_x16(y, y);      /* x^496 */
+	y = mq_montymul_x16(y, y);      /* x^992 */
+	y = mq_montymul_x16(y, y);      /* x^1984 */
+	y = mq_montymul_x16(y, x31);    /* x^2015 */
+	y = mq_montymul_x16(y, y);      /* x^4030 */
+	y = mq_montymul_x16(y, y);      /* x^8060 */
+	y = mq_montymul_x16(y, y);      /* x^16120 */
+	y = mq_montymul_x16(y, y);      /* x^32240 */
+	y = mq_montymul_x16(y, y);      /* x^64480 */
+	y = mq_montymul_x16(y, x31);    /* x^64511 */
+
+	return y;
 
 #endif
 }
@@ -826,7 +1167,7 @@ static const uint16_t NX[] = {
 ALIGNED_AVX2
 static const union {
 	uint16_t w16[64];
-	__m256i w256[64];
+	__m256i w256[4];
 } vGM8 = {
 	{
 		  136,   136,   136,   136,   136,   136,   136,   136,
@@ -843,7 +1184,7 @@ static const union {
 ALIGNED_AVX2
 static const union {
 	uint16_t w16[64];
-	__m256i w256[64];
+	__m256i w256[4];
 } vGM16 = {
 	{
 		   81,    81,    81,    81,    44,    44,    44,    44,
@@ -860,7 +1201,7 @@ static const union {
 ALIGNED_AVX2
 static const union {
 	uint16_t w16[64];
-	__m256i w256[64];
+	__m256i w256[4];
 } vGM32 = {
 	{
 		    9,     9,   185,   185,   113,   113,   124,   124,
@@ -877,7 +1218,7 @@ static const union {
 ALIGNED_AVX2
 static const union {
 	uint16_t w16[64];
-	__m256i w256[64];
+	__m256i w256[4];
 } vGM64 = {
 	{
 		    3,   151,   209,   154,   192,   155,    12,    90,
@@ -894,7 +1235,7 @@ static const union {
 ALIGNED_AVX2
 static const union {
 	uint16_t w16[64];
-	__m256i w256[64];
+	__m256i w256[4];
 } viGM8 = {
 	{
 		  240,   240,   240,   240,   240,   240,   240,   240,
@@ -911,7 +1252,7 @@ static const union {
 ALIGNED_AVX2
 static const union {
 	uint16_t w16[64];
-	__m256i w256[64];
+	__m256i w256[4];
 } viGM16 = {
 	{
 		  165,   165,   165,   165,   111,   111,   111,   111,
@@ -928,7 +1269,7 @@ static const union {
 ALIGNED_AVX2
 static const union {
 	uint16_t w16[64];
-	__m256i w256[64];
+	__m256i w256[4];
 } viGM32 = {
 	{
 		  200,   200,   232,   232,   116,   116,   114,   114,
@@ -945,7 +1286,7 @@ static const union {
 ALIGNED_AVX2
 static const union {
 	uint16_t w16[64];
-	__m256i w256[64];
+	__m256i w256[4];
 } viGM64 = {
 	{
 		   86,    80,    91,   252,   170,   194,   150,    20,
@@ -1021,7 +1362,7 @@ static const uint16_t NX[] = {
 ALIGNED_AVX2
 static const union {
 	uint16_t w16[64];
-	__m256i w256[64];
+	__m256i w256[4];
 } vGM8 = {
 	{
 		  155,   155,   155,   155,   155,   155,   155,   155,
@@ -1038,7 +1379,7 @@ static const union {
 ALIGNED_AVX2
 static const union {
 	uint16_t w16[64];
-	__m256i w256[64];
+	__m256i w256[4];
 } vGM16 = {
 	{
 		  447,   447,   447,   447,   431,   431,   431,   431,
@@ -1055,7 +1396,7 @@ static const union {
 ALIGNED_AVX2
 static const union {
 	uint16_t w16[64];
-	__m256i w256[64];
+	__m256i w256[4];
 } vGM32 = {
 	{
 		  617,   617,   205,   205,   196,   196,   363,   363,
@@ -1072,7 +1413,7 @@ static const union {
 ALIGNED_AVX2
 static const union {
 	uint16_t w16[64];
-	__m256i w256[64];
+	__m256i w256[4];
 } vGM64 = {
 	{
 		  365,   104,   440,   473,    87,   305,   758,   315,
@@ -1089,7 +1430,7 @@ static const union {
 ALIGNED_AVX2
 static const union {
 	uint16_t w16[64];
-	__m256i w256[64];
+	__m256i w256[4];
 } viGM8 = {
 	{
 		  429,   429,   429,   429,   429,   429,   429,   429,
@@ -1106,7 +1447,7 @@ static const union {
 ALIGNED_AVX2
 static const union {
 	uint16_t w16[64];
-	__m256i w256[64];
+	__m256i w256[4];
 } viGM16 = {
 	{
 		  541,   541,   541,   541,   661,   661,   661,   661,
@@ -1123,7 +1464,7 @@ static const union {
 ALIGNED_AVX2
 static const union {
 	uint16_t w16[64];
-	__m256i w256[64];
+	__m256i w256[4];
 } viGM32 = {
 	{
 		  286,   286,   737,   737,    45,    45,   323,   323,
@@ -1140,7 +1481,7 @@ static const union {
 ALIGNED_AVX2
 static const union {
 	uint16_t w16[64];
-	__m256i w256[64];
+	__m256i w256[4];
 } viGM64 = {
 	{
 		  435,   351,    55,   230,   287,   571,   107,    28,
@@ -1216,7 +1557,7 @@ static const uint16_t NX[] = {
 ALIGNED_AVX2
 static const union {
 	uint16_t w16[64];
-	__m256i w256[64];
+	__m256i w256[4];
 } vGM8 = {
 	{
 		  255,   255,   255,   255,   255,   255,   255,   255,
@@ -1233,7 +1574,7 @@ static const union {
 ALIGNED_AVX2
 static const union {
 	uint16_t w16[64];
-	__m256i w256[64];
+	__m256i w256[4];
 } vGM16 = {
 	{
 		  769,   769,   769,   769,    64,    64,    64,    64,
@@ -1250,7 +1591,7 @@ static const union {
 ALIGNED_AVX2
 static const union {
 	uint16_t w16[64];
-	__m256i w256[64];
+	__m256i w256[4];
 } vGM32 = {
 	{
 		 1033,  1033,  1694,  1694,  1713,  1713,  2735,  2735,
@@ -1267,7 +1608,7 @@ static const union {
 ALIGNED_AVX2
 static const union {
 	uint16_t w16[64];
-	__m256i w256[64];
+	__m256i w256[4];
 } vGM64 = {
 	{
 		  257,  1569,  1596,  2995,  2740,    44,   293,  2838,
@@ -1284,7 +1625,7 @@ static const union {
 ALIGNED_AVX2
 static const union {
 	uint16_t w16[64];
-	__m256i w256[64];
+	__m256i w256[4];
 } viGM8 = {
 	{
 		 1030,  1030,  1030,  1030,  1030,  1030,  1030,  1030,
@@ -1301,7 +1642,7 @@ static const union {
 ALIGNED_AVX2
 static const union {
 	uint16_t w16[64];
-	__m256i w256[64];
+	__m256i w256[4];
 } viGM16 = {
 	{
 		 1887,  1887,  1887,  1887,  1087,  1087,  1087,  1087,
@@ -1318,7 +1659,7 @@ static const union {
 ALIGNED_AVX2
 static const union {
 	uint16_t w16[64];
-	__m256i w256[64];
+	__m256i w256[4];
 } viGM32 = {
 	{
 		 1640,  1640,  1794,  1794,   748,   748,   802,   802,
@@ -1335,7 +1676,7 @@ static const union {
 ALIGNED_AVX2
 static const union {
 	uint16_t w16[64];
-	__m256i w256[64];
+	__m256i w256[4];
 } viGM64 = {
 	{
 		 3237,    21,  2605,   310,   351,  2489,  2328,   916,
@@ -1346,6 +1687,210 @@ static const union {
 		 1310,  1076,  2059,   507,   864,   237,   865,  3023,
 		  267,  1495,  1088,  1778,  2636,   122,  3086,  2118,
 		  491,  3036,  3285,   589,   334,  1733,  1760,  3072
+	}
+};
+
+#endif
+
+#elif Q == 64513
+
+/* q = 64513, w = 45056, 1/w = 10262 */
+
+ALIGNED_AVX2
+static const uint16_t GM[] = {
+	14321, 37549, 22229, 48008, 45449, 33295, 30746, 44270,
+	50769, 32369, 21408, 46914, 55118, 33528,  8851, 41654,
+	44478, 35380, 27527, 36366, 20143, 11361, 25252, 30820,
+	41567, 48474, 58272, 44960, 29104, 42082, 22935, 10681,
+	16608, 19616, 30608, 23970, 62122, 49383, 19646, 21464,
+	 7941, 26533, 36823, 19129, 10615,  9430, 56916, 53054,
+	54464, 55130, 22562, 57724, 12296, 48209, 16446, 46274,
+	56620,  8577, 29643, 46572, 32076, 11782, 63217, 19725,
+	52463, 18832, 50012, 56584, 43011, 18731,  4127, 16186,
+	10623, 36786, 24985, 53252, 33186,  1160, 35803, 14941,
+	33449, 29563, 58600,  5322, 58637, 35074,  2844, 48108,
+	30362, 21442, 17671,  9560, 18586,  9522, 54639, 40669,
+	 3761, 54909, 44160, 44700,  7814, 11591, 51816, 32114,
+	  598, 44958, 16267, 47057, 34571, 59975, 15546,   835,
+	49003, 57754, 22131, 35462, 35445, 16507, 59171, 54723,
+	33161, 12442, 46882, 62707, 60543, 36828, 56202, 63025
+};
+
+ALIGNED_AVX2
+static const uint16_t iGM[] = {
+	14321, 26964, 16505, 42284, 20243, 33767, 31218, 19064,
+	22859, 55662, 30985,  9395, 17599, 43105, 32144, 13744,
+	53832, 41578, 22431, 35409, 19553,  6241, 16039, 22946,
+	33693, 39261, 53152, 44370, 28147, 36986, 29133, 20035,
+	44788,  1296, 52731, 32437, 17941, 34870, 55936,  7893,
+	18239, 48067, 16304, 52217,  6789, 41951,  9383, 10049,
+	11459,  7597, 55083, 53898, 45384, 27690, 37980, 56572,
+	43049, 44867, 15130,  2391, 40543, 33905, 44897, 47905,
+	 1488,  8311, 27685,  3970,  1806, 17631, 52071, 31352,
+	 9790,  5342, 48006, 29068, 29051, 42382,  6759, 15510,
+	63678, 48967,  4538, 29942, 17456, 48246, 19555, 63915,
+	32399, 12697, 52922, 56699, 19813, 20353,  9604, 60752,
+	23844,  9874, 54991, 45927, 54953, 46842, 43071, 34151,
+	16405, 61669, 29439,  5876, 59191,  5913, 34950, 31064,
+	49572, 28710, 63353, 31327, 11261, 39528, 27727, 53890,
+	48327, 60386, 45782, 21502,  7929, 14501, 45681, 12050
+};
+
+ALIGNED_AVX2
+static const uint16_t NX[] = {
+	52463, 12050, 18832, 45681, 50012, 14501, 56584,  7929,
+	43011, 21502, 18731, 45782,  4127, 60386, 16186, 48327,
+	10623, 53890, 36786, 27727, 24985, 39528, 53252, 11261,
+	33186, 31327,  1160, 63353, 35803, 28710, 14941, 49572,
+	33449, 31064, 29563, 34950, 58600,  5913,  5322, 59191,
+	58637,  5876, 35074, 29439,  2844, 61669, 48108, 16405,
+	30362, 34151, 21442, 43071, 17671, 46842,  9560, 54953,
+	18586, 45927,  9522, 54991, 54639,  9874, 40669, 23844,
+	 3761, 60752, 54909,  9604, 44160, 20353, 44700, 19813,
+	 7814, 56699, 11591, 52922, 51816, 12697, 32114, 32399,
+	  598, 63915, 44958, 19555, 16267, 48246, 47057, 17456,
+	34571, 29942, 59975,  4538, 15546, 48967,   835, 63678,
+	49003, 15510, 57754,  6759, 22131, 42382, 35462, 29051,
+	35445, 29068, 16507, 48006, 59171,  5342, 54723,  9790,
+	33161, 31352, 12442, 52071, 46882, 17631, 62707,  1806,
+	60543,  3970, 36828, 27685, 56202,  8311, 63025,  1488
+};
+
+#if BAT_AVX2
+
+ALIGNED_AVX2
+static const union {
+	uint16_t w16[64];
+	__m256i w256[4];
+} vGM8 = {
+	{
+		 50769,  50769,  50769,  50769,  50769,  50769,  50769,  50769,
+		 32369,  32369,  32369,  32369,  32369,  32369,  32369,  32369,
+		 21408,  21408,  21408,  21408,  21408,  21408,  21408,  21408,
+		 46914,  46914,  46914,  46914,  46914,  46914,  46914,  46914,
+		 55118,  55118,  55118,  55118,  55118,  55118,  55118,  55118,
+		 33528,  33528,  33528,  33528,  33528,  33528,  33528,  33528,
+		  8851,   8851,   8851,   8851,   8851,   8851,   8851,   8851,
+		 41654,  41654,  41654,  41654,  41654,  41654,  41654,  41654
+	}
+};
+
+ALIGNED_AVX2
+static const union {
+	uint16_t w16[64];
+	__m256i w256[4];
+} vGM16 = {
+	{
+		 44478,  44478,  44478,  44478,  27527,  27527,  27527,  27527,
+		 35380,  35380,  35380,  35380,  36366,  36366,  36366,  36366,
+		 20143,  20143,  20143,  20143,  25252,  25252,  25252,  25252,
+		 11361,  11361,  11361,  11361,  30820,  30820,  30820,  30820,
+		 41567,  41567,  41567,  41567,  58272,  58272,  58272,  58272,
+		 48474,  48474,  48474,  48474,  44960,  44960,  44960,  44960,
+		 29104,  29104,  29104,  29104,  22935,  22935,  22935,  22935,
+		 42082,  42082,  42082,  42082,  10681,  10681,  10681,  10681
+	}
+};
+
+ALIGNED_AVX2
+static const union {
+	uint16_t w16[64];
+	__m256i w256[4];
+} vGM32 = {
+	{
+		 16608,  16608,  62122,  62122,  19616,  19616,  49383,  49383,
+		 30608,  30608,  19646,  19646,  23970,  23970,  21464,  21464,
+		  7941,   7941,  10615,  10615,  26533,  26533,   9430,   9430,
+		 36823,  36823,  56916,  56916,  19129,  19129,  53054,  53054,
+		 54464,  54464,  12296,  12296,  55130,  55130,  48209,  48209,
+		 22562,  22562,  16446,  16446,  57724,  57724,  46274,  46274,
+		 56620,  56620,  32076,  32076,   8577,   8577,  11782,  11782,
+		 29643,  29643,  63217,  63217,  46572,  46572,  19725,  19725
+	}
+};
+
+ALIGNED_AVX2
+static const union {
+	uint16_t w16[64];
+	__m256i w256[4];
+} vGM64 = {
+	{
+		 52463,  10623,  18832,  36786,  50012,  24985,  56584,  53252,
+		 43011,  33186,  18731,   1160,   4127,  35803,  16186,  14941,
+		 33449,  30362,  29563,  21442,  58600,  17671,   5322,   9560,
+		 58637,  18586,  35074,   9522,   2844,  54639,  48108,  40669,
+		  3761,    598,  54909,  44958,  44160,  16267,  44700,  47057,
+		  7814,  34571,  11591,  59975,  51816,  15546,  32114,    835,
+		 49003,  33161,  57754,  12442,  22131,  46882,  35462,  62707,
+		 35445,  60543,  16507,  36828,  59171,  56202,  54723,  63025
+	}
+};
+
+ALIGNED_AVX2
+static const union {
+	uint16_t w16[64];
+	__m256i w256[4];
+} viGM8 = {
+	{
+		 22859,  22859,  22859,  22859,  22859,  22859,  22859,  22859,
+		 55662,  55662,  55662,  55662,  55662,  55662,  55662,  55662,
+		 30985,  30985,  30985,  30985,  30985,  30985,  30985,  30985,
+		  9395,   9395,   9395,   9395,   9395,   9395,   9395,   9395,
+		 17599,  17599,  17599,  17599,  17599,  17599,  17599,  17599,
+		 43105,  43105,  43105,  43105,  43105,  43105,  43105,  43105,
+		 32144,  32144,  32144,  32144,  32144,  32144,  32144,  32144,
+		 13744,  13744,  13744,  13744,  13744,  13744,  13744,  13744
+	}
+};
+
+ALIGNED_AVX2
+static const union {
+	uint16_t w16[64];
+	__m256i w256[4];
+} viGM16 = {
+	{
+		 53832,  53832,  53832,  53832,  22431,  22431,  22431,  22431,
+		 41578,  41578,  41578,  41578,  35409,  35409,  35409,  35409,
+		 19553,  19553,  19553,  19553,  16039,  16039,  16039,  16039,
+		  6241,   6241,   6241,   6241,  22946,  22946,  22946,  22946,
+		 33693,  33693,  33693,  33693,  53152,  53152,  53152,  53152,
+		 39261,  39261,  39261,  39261,  44370,  44370,  44370,  44370,
+		 28147,  28147,  28147,  28147,  29133,  29133,  29133,  29133,
+		 36986,  36986,  36986,  36986,  20035,  20035,  20035,  20035
+	}
+};
+
+ALIGNED_AVX2
+static const union {
+	uint16_t w16[64];
+	__m256i w256[4];
+} viGM32 = {
+	{
+		 44788,  44788,  17941,  17941,   1296,   1296,  34870,  34870,
+		 52731,  52731,  55936,  55936,  32437,  32437,   7893,   7893,
+		 18239,  18239,   6789,   6789,  48067,  48067,  41951,  41951,
+		 16304,  16304,   9383,   9383,  52217,  52217,  10049,  10049,
+		 11459,  11459,  45384,  45384,   7597,   7597,  27690,  27690,
+		 55083,  55083,  37980,  37980,  53898,  53898,  56572,  56572,
+		 43049,  43049,  40543,  40543,  44867,  44867,  33905,  33905,
+		 15130,  15130,  44897,  44897,   2391,   2391,  47905,  47905
+	}
+};
+
+ALIGNED_AVX2
+static const union {
+	uint16_t w16[64];
+	__m256i w256[4];
+} viGM64 = {
+	{
+		  1488,   9790,   8311,   5342,  27685,  48006,   3970,  29068,
+		  1806,  29051,  17631,  42382,  52071,   6759,  31352,  15510,
+		 63678,  32399,  48967,  12697,   4538,  52922,  29942,  56699,
+		 17456,  19813,  48246,  20353,  19555,   9604,  63915,  60752,
+		 23844,  16405,   9874,  61669,  54991,  29439,  45927,   5876,
+		 54953,  59191,  46842,   5913,  43071,  34950,  34151,  31064,
+		 49572,  48327,  28710,  60386,  63353,  45782,  31327,  21502,
+		 11261,   7929,  39528,  14501,  27727,  45681,  53890,  12050
 	}
 };
 
@@ -2247,7 +2792,11 @@ iNTT(uint16_t *d, const uint16_t *a, unsigned logn)
 					u = d[j];
 					v = d[j + t];
 					d[j] = mq_add(u, v);
+#if Q <= 46341
 					d[j + t] = mq_montyred((Q + u - v) * s);
+#else
+					d[j + t] = mq_montymul(mq_sub(u, v), s);
+#endif
 				}
 			}
 			t = dt;
@@ -2330,7 +2879,11 @@ iNTT(uint16_t *d, const uint16_t *a, unsigned logn)
 				u = d[j];
 				v = d[j + t];
 				d[j] = mq_add(u, v);
+#if Q <= 46341
 				d[j + t] = mq_montyred((Q + u - v) * s);
+#else
+				d[j + t] = mq_montymul(mq_sub(u, v), s);
+#endif
 			}
 		}
 		t = dt;
@@ -2653,10 +3206,19 @@ mq_poly_mul_ntt(uint16_t *d, const uint16_t *a, const uint16_t *b,
 			a1 = a[u + 1];
 			b0 = b[u];
 			b1 = b[u + 1];
+#if Q <= 19433
 			d[u] = mq_montyred(
 				a0 * b0 + mq_montymul(a1, b1) * NX[u >> 1]);
 			d[u + 1] = mq_montyred(
 				a1 * b0 + a0 * b1);
+#else
+			d[u] = mq_add(
+				mq_montymul(a0, b0),
+				mq_montymul(mq_montymul(a1, b1), NX[u >> 1]));
+			d[u + 1] = mq_add(
+				mq_montymul(a1, b0),
+				mq_montymul(a0, b1));
+#endif
 		}
 		break;
 	case 9:
@@ -2672,6 +3234,7 @@ mq_poly_mul_ntt(uint16_t *d, const uint16_t *a, const uint16_t *b,
 			b2 = b[u + 2];
 			b3 = b[u + 3];
 			x = NX[u >> 2];
+#if Q <= 19433
 			d[u] = mq_montyred(a0 * b0
 				+ x * mq_montyred(
 					a1 * b3 + a2 * b2 + a3 * b1));
@@ -2683,6 +3246,39 @@ mq_poly_mul_ntt(uint16_t *d, const uint16_t *a, const uint16_t *b,
 				+ x * mq_montyred(a3 * b3));
 			d[u + 3] = mq_montyred(
 				a0 * b3 + a1 * b2 + a2 * b1 + a3 * b0);
+#else
+			d[u] = mq_add(
+				mq_montymul(a0, b0),
+				mq_montymul(x,
+					mq_add(
+						mq_add(
+							mq_montymul(a1, b3),
+							mq_montymul(a2, b2)),
+						mq_montymul(a3, b1))));
+			d[u + 1] = mq_add(
+				mq_add(
+					mq_montymul(a0, b1),
+					mq_montymul(a1, b0)),
+				mq_montymul(
+					x,
+					mq_add(
+						mq_montymul(a2, b3),
+						mq_montymul(a3, b2))));
+			d[u + 2] = mq_add(
+				mq_add(
+					mq_add(
+						mq_montymul(a0, b2),
+						mq_montymul(a1, b1)),
+					mq_montymul(a2, b0)),
+				mq_montymul(x, mq_montymul(a3, b3)));
+			d[u + 3] = mq_add(
+				mq_add(
+					mq_montymul(a0, b3),
+					mq_montymul(a1, b2)),
+				mq_add(
+					mq_montymul(a2, b1),
+					mq_montymul(a3, b0)));
+#endif
 		}
 		break;
 	case 10:
@@ -2708,6 +3304,7 @@ mq_poly_mul_ntt(uint16_t *d, const uint16_t *a, const uint16_t *b,
 			b6 = b[u + 6];
 			b7 = b[u + 7];
 			x = NX[u >> 3];
+#if Q <= 19433
 			d[u] = mq_montyred(
 				a0 * b0
 				+ x * mq_montyred(
@@ -2742,6 +3339,128 @@ mq_poly_mul_ntt(uint16_t *d, const uint16_t *a, const uint16_t *b,
 			d[u + 7] = mq_montyred(
 				a0 * b7 + a1 * b6 + a2 * b5 + a3 * b4
 				+ a4 * b3 + a5 * b2 + a6 * b1 + a7 * b0);
+#else
+			d[u] = mq_add(
+				mq_montymul(a0, b0),
+				mq_montymul(x, mq_add(
+					mq_add(
+						mq_add(
+							mq_montymul(a1, b7),
+							mq_montymul(a2, b6)),
+						mq_add(
+							mq_montymul(a3, b5),
+							mq_montymul(a4, b4))),
+					mq_add(
+						mq_add(
+							mq_montymul(a5, b3),
+							mq_montymul(a6, b2)),
+						mq_montymul(a7, b1)))));
+			d[u + 1] = mq_add(
+				mq_add(
+					mq_montymul(a0, b1),
+					mq_montymul(a1, b0)),
+				mq_montymul(x, mq_add(
+					mq_add(
+						mq_add(
+							mq_montymul(a2, b7),
+							mq_montymul(a3, b6)),
+						mq_add(
+							mq_montymul(a4, b5),
+							mq_montymul(a5, b4))),
+					mq_add(
+						mq_montymul(a6, b3),
+						mq_montymul(a7, b2)))));
+			d[u + 2] = mq_add(
+				mq_add(
+					mq_add(
+						mq_montymul(a0, b2),
+						mq_montymul(a1, b1)),
+					mq_montymul(a2, b0)),
+				mq_montymul(x, mq_add(
+					mq_add(
+						mq_add(
+							mq_montymul(a3, b7),
+							mq_montymul(a4, b6)),
+						mq_add(
+							mq_montymul(a5, b5),
+							mq_montymul(a6, b4))),
+					mq_montymul(a7, b3))));
+			d[u + 3] = mq_add(
+				mq_add(
+					mq_add(
+						mq_montymul(a0, b3),
+						mq_montymul(a1, b2)),
+					mq_add(
+						mq_montymul(a2, b1),
+						mq_montymul(a3, b0))),
+				mq_montymul(x, mq_add(
+					mq_add(
+						mq_montymul(a4, b7),
+						mq_montymul(a5, b6)),
+					mq_add(
+						mq_montymul(a6, b5),
+						mq_montymul(a7, b4)))));
+			d[u + 4] = mq_add(
+				mq_add(
+					mq_add(
+						mq_add(
+							mq_montymul(a0, b4),
+							mq_montymul(a1, b3)),
+						mq_add(
+							mq_montymul(a2, b2),
+							mq_montymul(a3, b1))),
+					mq_montymul(a4, b0)),
+				mq_montymul(x, mq_add(
+					mq_add(
+						mq_montymul(a5, b7),
+						mq_montymul(a6, b6)),
+					mq_montymul(a7, b5))));
+			d[u + 5] = mq_add(
+				mq_add(
+					mq_add(
+						mq_add(
+							mq_montymul(a0, b5),
+							mq_montymul(a1, b4)),
+						mq_add(
+							mq_montymul(a2, b3),
+							mq_montymul(a3, b2))),
+					mq_add(
+						mq_montymul(a4, b1),
+						mq_montymul(a5, b0))),
+				mq_montymul(x, mq_add(
+					mq_montymul(a6, b7),
+					mq_montymul(a7, b6))));
+			d[u + 6] = mq_add(
+				mq_add(
+					mq_add(
+						mq_add(
+							mq_montymul(a0, b6),
+							mq_montymul(a1, b5)),
+						mq_add(
+							mq_montymul(a2, b4),
+							mq_montymul(a3, b3))),
+					mq_add(
+						mq_add(
+							mq_montymul(a4, b2),
+							mq_montymul(a5, b1)),
+						mq_montymul(a6, b0))),
+				mq_montymul(x, mq_montymul(a7, b7)));
+			d[u + 7] = mq_add(
+				mq_add(
+					mq_add(
+						mq_montymul(a0, b7),
+						mq_montymul(a1, b6)),
+					mq_add(
+						mq_montymul(a2, b5),
+						mq_montymul(a3, b4))),
+				mq_add(
+					mq_add(
+						mq_montymul(a4, b3),
+						mq_montymul(a5, b2)),
+					mq_add(
+						mq_montymul(a6, b1),
+						mq_montymul(a7, b0))));
+#endif
 		}
 		break;
 	}
@@ -2774,23 +3493,23 @@ mq_poly_inv_ntt(uint16_t *d, const uint16_t *a, unsigned logn)
 		return (int)(z >> 31);
 	}
 
-	Qx16 = _mm256_set1_epi16(Q);
+	Qx16 = _mm256_set1_epi16(Qs);
 	if (logn <= 7) {
 		n = (size_t)1 << logn;
-		zz = _mm256_set1_epi16(-1);
+		zz = _mm256_setzero_si256();
 		for (u = 0; u < n; u += 16) {
 			__m256i a0;
 
 			a0 = _mm256_loadu_si256((void *)(a + u));
-			zz = _mm256_and_si256(zz, _mm256_sub_epi16(a0, Qx16));
+			zz = _mm256_or_si256(zz, _mm256_cmpeq_epi16(a0, Qx16));
 			_mm256_storeu_si256((void *)(d + u), mq_inv_x16(a0));
 		}
-		zz = _mm256_and_si256(zz, _mm256_bsrli_epi128(zz, 8));
-		zz = _mm256_and_si256(zz, _mm256_bsrli_epi128(zz, 4));
-		zz = _mm256_and_si256(zz, _mm256_bsrli_epi128(zz, 2));
+		zz = _mm256_or_si256(zz, _mm256_bsrli_epi128(zz, 8));
+		zz = _mm256_or_si256(zz, _mm256_bsrli_epi128(zz, 4));
+		zz = _mm256_or_si256(zz, _mm256_bsrli_epi128(zz, 2));
 		z = (uint32_t)_mm256_extract_epi32(zz, 0)
-			& (uint32_t)_mm256_extract_epi32(zz, 4);
-		return (int)((z >> 15) & 1);
+			| (uint32_t)_mm256_extract_epi32(zz, 4);
+		return 1 - (int)(z & 1);
 	}
 
 	/*
@@ -2818,8 +3537,7 @@ mq_poly_inv_ntt(uint16_t *d, const uint16_t *a, unsigned logn)
 	 * that we can handle with coefficient-wise inversion in NTT
 	 * representation.
 	 */
-	z = (uint32_t)-1;
-	zz = _mm256_set1_epi16(-1);
+	zz = _mm256_set1_epi16(0);
 	switch (logn) {
 
 	case 8:
@@ -2832,19 +3550,19 @@ mq_poly_inv_ntt(uint16_t *d, const uint16_t *a, unsigned logn)
 			nx = negx16(x);
 			c = mq_montyLC2_x16(a0, a0,
 				nx, mq_montymul_x16(a1, a1));
-			zz = _mm256_and_si256(zz, _mm256_sub_epi16(c, Qx16));
+			zz = _mm256_or_si256(zz, _mm256_cmpeq_epi16(c, Qx16));
 			c = mq_inv_x16(c);
 			_mm256_storeu_si256((void *)(d + u),
 				mq_montymul_x16(a0, c));
 			_mm256_storeu_si256((void *)(d + u + 128),
 				mq_montymul_x16(a1, negx16(c)));
 		}
-		zz = _mm256_and_si256(zz, _mm256_bsrli_epi128(zz, 8));
-		zz = _mm256_and_si256(zz, _mm256_bsrli_epi128(zz, 4));
-		zz = _mm256_and_si256(zz, _mm256_bsrli_epi128(zz, 2));
+		zz = _mm256_or_si256(zz, _mm256_bsrli_epi128(zz, 8));
+		zz = _mm256_or_si256(zz, _mm256_bsrli_epi128(zz, 4));
+		zz = _mm256_or_si256(zz, _mm256_bsrli_epi128(zz, 2));
 		z = (uint32_t)_mm256_extract_epi32(zz, 0)
-			& (uint32_t)_mm256_extract_epi32(zz, 4);
-		return (int)((z >> 15) & 1);
+			| (uint32_t)_mm256_extract_epi32(zz, 4);
+		return 1 - (int)(z & 1);
 
 	case 9:
 		for (u = 0; u < 128; u += 16) {
@@ -2868,7 +3586,7 @@ mq_poly_inv_ntt(uint16_t *d, const uint16_t *a, unsigned logn)
 
 			c = mq_inv_x16(mq_montyLC2_x16(
 				b0, b0, nx, mq_montymul_x16(b1, b1)));
-			zz = _mm256_and_si256(zz, _mm256_sub_epi16(c, Qx16));
+			zz = _mm256_or_si256(zz, _mm256_cmpeq_epi16(c, Qx16));
 
 			b0 = mq_montymul_x16(b0, c);
 			b1 = mq_montymul_x16(b1, negx16(c));
@@ -2886,12 +3604,12 @@ mq_poly_inv_ntt(uint16_t *d, const uint16_t *a, unsigned logn)
 				mq_montyLC2_x16(
 					a3, negx16(b0), a1, negx16(b1)));
 		}
-		zz = _mm256_and_si256(zz, _mm256_bsrli_epi128(zz, 8));
-		zz = _mm256_and_si256(zz, _mm256_bsrli_epi128(zz, 4));
-		zz = _mm256_and_si256(zz, _mm256_bsrli_epi128(zz, 2));
+		zz = _mm256_or_si256(zz, _mm256_bsrli_epi128(zz, 8));
+		zz = _mm256_or_si256(zz, _mm256_bsrli_epi128(zz, 4));
+		zz = _mm256_or_si256(zz, _mm256_bsrli_epi128(zz, 2));
 		z = (uint32_t)_mm256_extract_epi32(zz, 0)
-			& (uint32_t)_mm256_extract_epi32(zz, 4);
-		return (int)((z >> 15) & 1);
+			| (uint32_t)_mm256_extract_epi32(zz, 4);
+		return 1 - (int)(z & 1);
 
 	case 10:
 		for (u = 0; u < 128; u += 16) {
@@ -2974,7 +3692,7 @@ mq_poly_inv_ntt(uint16_t *d, const uint16_t *a, unsigned logn)
 
 			e = mq_inv_x16(mq_montyLC2_x16(
 				c0, c0, nx, mq_montymul_x16(c1, c1)));
-			zz = _mm256_and_si256(zz, _mm256_sub_epi16(e, Qx16));
+			zz = _mm256_or_si256(zz, _mm256_cmpeq_epi16(e, Qx16));
 
 			/*
 			e = mq_inv(mq_montyred(
@@ -3087,12 +3805,12 @@ mq_poly_inv_ntt(uint16_t *d, const uint16_t *a, unsigned logn)
 				- a5 * f1 - a7 * f0);
 			*/
 		}
-		zz = _mm256_and_si256(zz, _mm256_bsrli_epi128(zz, 8));
-		zz = _mm256_and_si256(zz, _mm256_bsrli_epi128(zz, 4));
-		zz = _mm256_and_si256(zz, _mm256_bsrli_epi128(zz, 2));
+		zz = _mm256_or_si256(zz, _mm256_bsrli_epi128(zz, 8));
+		zz = _mm256_or_si256(zz, _mm256_bsrli_epi128(zz, 4));
+		zz = _mm256_or_si256(zz, _mm256_bsrli_epi128(zz, 2));
 		z = (uint32_t)_mm256_extract_epi32(zz, 0)
-			& (uint32_t)_mm256_extract_epi32(zz, 4);
-		return (int)((z >> 15) & 1);
+			| (uint32_t)_mm256_extract_epi32(zz, 4);
+		return 1 - (int)(z & 1);
 
 	default:
 		/* normally unreachable if logn is correct */
@@ -3147,12 +3865,24 @@ mq_poly_inv_ntt(uint16_t *d, const uint16_t *a, unsigned logn)
 
 			a0 = a[u];
 			a1 = a[u + 1];
+#if Q <= 19433
 			c = mq_montyred(a1 * a1);
 			c = mq_montyred(Q2 + a0 * a0 - NX[u >> 1] * c);
+#else
+			c = mq_montymul(a1, a1);
+			c = mq_sub(
+				mq_montymul(a0, a0),
+				mq_montymul(NX[u >> 1], c));
+#endif
 			z &= c - Q;
 			c = mq_inv(c);
+#if Q <= 19433
 			d[u] = mq_montyred(a0 * c);
 			d[u + 1] = mq_montyred(a1 * (2 * Q - c));
+#else
+			d[u] = mq_montymul(a0, c);
+			d[u + 1] = mq_neg(mq_montymul(a1, c));
+#endif
 		}
 		return (int)(z >> 31);
 
@@ -3166,6 +3896,7 @@ mq_poly_inv_ntt(uint16_t *d, const uint16_t *a, unsigned logn)
 			a3 = a[u + 3];
 			x = NX[u >> 2];
 
+#if Q <= 19433
 			b0 = mq_montyred(a0 * a0 + x * mq_montyred(
 				2 * Q2 + a2 * a2 - 2 * a1 * a3));
 			b1 = mq_montyred(2 * Q2
@@ -3182,6 +3913,37 @@ mq_poly_inv_ntt(uint16_t *d, const uint16_t *a, unsigned logn)
 				- a1 * b0 - x * mq_montyred(a3 * b1));
 			d[u + 2] = mq_montyred(a2 * b0 + a0 * b1);
 			d[u + 3] = mq_montyred(3 * Q2 - a3 * b0 - a1 * b1);
+#else
+			b0 = mq_add(
+				mq_montymul(a0, a0),
+				mq_montymul(x, mq_sub(
+					mq_montymul(a2, a2),
+					mq_mul2(mq_montymul(a1, a3)))));
+			b1 = mq_sub(
+				mq_mul2(mq_montymul(a0, a2)),
+				mq_add(
+					mq_montymul(a1, a1),
+					mq_montymul(x, mq_montymul(a3, a3))));
+			c = mq_inv(mq_sub(
+				mq_montymul(b0, b0),
+				mq_montymul(x, mq_montymul(b1, b1))));
+			z &= c - Q;
+			b0 = mq_montymul(b0, c);
+			b1 = mq_neg(mq_montymul(b1, c));
+
+			d[u] = mq_add(
+				mq_montymul(a0, b0),
+				mq_montymul(x, mq_montymul(a2, b1)));
+			d[u + 1] = mq_neg(mq_add(
+				mq_montymul(a1, b0),
+				mq_montymul(x, mq_montymul(a3, b1))));
+			d[u + 2] = mq_add(
+				mq_montymul(a2, b0),
+				mq_montymul(a0, b1));
+			d[u + 3] = mq_neg(mq_add(
+				mq_montymul(a3, b0),
+				mq_montymul(a1, b1)));
+#endif
 		}
 		return (int)(z >> 31);
 
@@ -3201,6 +3963,7 @@ mq_poly_inv_ntt(uint16_t *d, const uint16_t *a, unsigned logn)
 			a7 = a[u + 7];
 			x = NX[u >> 3];
 
+#if Q <= 19433
 			b0 = mq_montyred(a0 * a0 + x * mq_montyred(
 				4 * Q2 + a4 * a4
 				+ 2 * (a2 * a6 - a1 * a7 - a3 * a5)));
@@ -3248,6 +4011,131 @@ mq_poly_inv_ntt(uint16_t *d, const uint16_t *a, unsigned logn)
 				+ a4 * f1 + a6 * f0);
 			d[u + 7] = mq_montyred(5 * Q2 - a1 * f3 - a3 * f2
 				- a5 * f1 - a7 * f0);
+#else
+			b0 = mq_add(
+				mq_montymul(a0, a0),
+				mq_montymul(x, mq_add(
+					mq_montymul(a4, a4),
+					mq_mul2(mq_sub(
+						mq_montymul(a2, a6),
+						mq_add(
+							mq_montymul(a1, a7),
+							mq_montymul(a3, a5)))))));
+			b1 = mq_add(
+				mq_sub(
+					mq_mul2(mq_montymul(a0, a2)),
+					mq_montymul(a1, a1)),
+				mq_montymul(x, mq_sub(
+					mq_mul2(mq_sub(
+						mq_montymul(a4, a6),
+						mq_montymul(a3, a7))),
+					mq_montymul(a5, a5))));
+			b2 = mq_add(
+				mq_add(
+					mq_montymul(a2, a2),
+					mq_mul2(mq_sub(
+						mq_montymul(a0, a4),
+						mq_montymul(a1, a3)))),
+				mq_montymul(x, mq_sub(
+					mq_montymul(a6, a6),
+					mq_mul2(mq_montymul(a5, a7)))));
+			b3 = mq_sub(
+				mq_mul2(mq_sub(
+					mq_add(
+						mq_montymul(a0, a6),
+						mq_montymul(a2, a4)),
+					mq_montymul(a1, a5))),
+				mq_add(
+					mq_montymul(a3, a3),
+					mq_montymul(x, mq_montymul(a7, a7))));
+
+			c0 = mq_add(
+				mq_montymul(b0, b0),
+				mq_montymul(x, mq_sub(
+					mq_montymul(b2, b2),
+					mq_mul2(mq_montymul(b1, b3)))));
+			c1 = mq_sub(
+				mq_mul2(mq_montymul(b0, b2)),
+				mq_add(
+					mq_montymul(b1, b1),
+					mq_montymul(x, mq_montymul(b3, b3))));
+			e = mq_inv(mq_sub(
+				mq_montymul(c0, c0),
+				mq_montymul(x, mq_montymul(c1, c1))));
+			z &= e - Q;
+			c0 = mq_montymul(c0, e);
+			c1 = mq_neg(mq_montymul(c1, e));
+
+			f0 = mq_add(
+				mq_montymul(b0, c0),
+				mq_montymul(x, mq_montymul(b2, c1)));
+			f1 = mq_neg(mq_add(
+				mq_montymul(b1, c0),
+				mq_montymul(x, mq_montymul(b3, c1))));
+			f2 = mq_add(
+				mq_montymul(b2, c0),
+				mq_montymul(b0, c1));
+			f3 = mq_neg(mq_add(
+				mq_montymul(b3, c0),
+				mq_montymul(b1, c1)));
+
+			d[u] = mq_add(
+				mq_montymul(a0, f0),
+				mq_montymul(x, mq_add(
+					mq_add(
+						mq_montymul(a2, f3),
+						mq_montymul(a4, f2)),
+					mq_montymul(a6, f1))));
+			d[u + 1] = mq_neg(mq_add(
+				mq_montymul(a1, f0),
+				mq_montymul(x, mq_add(
+					mq_add(
+						mq_montymul(a3, f3),
+						mq_montymul(a5, f2)),
+					mq_montymul(a7, f1)))));
+			d[u + 2] = mq_add(
+				mq_add(
+					mq_montymul(a0, f1),
+					mq_montymul(a2, f0)),
+				mq_montymul(x, mq_add(
+					mq_montymul(a4, f3),
+					mq_montymul(a6, f2))));
+			d[u + 3] = mq_neg(mq_add(
+				mq_add(
+					mq_montymul(a1, f1),
+					mq_montymul(a3, f0)),
+				mq_montymul(x, mq_add(
+					mq_montymul(a5, f3),
+					mq_montymul(a7, f2)))));
+			d[u + 4] = mq_add(
+				mq_add(
+					mq_montymul(a0, f2),
+					mq_montymul(a2, f1)),
+				mq_add(
+					mq_montymul(a4, f0),
+					mq_montymul(x, mq_montymul(a6, f3))));
+			d[u + 5] = mq_neg(mq_add(
+				mq_add(
+					mq_montymul(a1, f2),
+					mq_montymul(a3, f1)),
+				mq_add(
+					mq_montymul(a5, f0),
+					mq_montymul(x, mq_montymul(a7, f3)))));
+			d[u + 6] = mq_add(
+				mq_add(
+					mq_montymul(a0, f3),
+					mq_montymul(a2, f2)),
+				mq_add(
+					mq_montymul(a4, f1),
+					mq_montymul(a6, f0)));
+			d[u + 7] = mq_neg(mq_add(
+				mq_add(
+					mq_montymul(a1, f3),
+					mq_montymul(a3, f2)),
+				mq_add(
+					mq_montymul(a5, f1),
+					mq_montymul(a7, f0))));
+#endif
 		}
 		return (int)(z >> 31);
 
@@ -3420,6 +4308,62 @@ static const uint16_t TT7[] = {
 	3119, 2022, 1879,  903, 1285, 2484, 1594,  951
 };
 
+#elif Q == 64513
+
+static const uint16_t TT1[] = {
+	51870, 41285
+};
+
+static const uint16_t TT2[] = {
+	57594, 46146, 47009, 35561
+};
+
+static const uint16_t TT3[] = {
+	17815, 32860, 20468,  7311, 21331,  8174, 60295, 10827
+};
+
+static const uint16_t TT4[] = {
+	50374, 49769, 28753, 36967, 35100,  5836, 59024, 20111,
+	 8531, 34131, 22806, 58055, 56188, 64402, 43386, 42781
+};
+
+static const uint16_t TT5[] = {
+	63672, 37076, 51977, 47561, 16345, 41161, 55429, 18505,
+	 4032,  1655,  8808,  2864, 49976,  3559, 31777,  8445,
+	20197, 61378, 25083, 43179, 25778, 19834, 26987, 24610,
+	10137, 37726, 51994, 12297, 45594, 41178, 56079, 29483
+};
+
+static const uint16_t TT6[] = {
+	12126, 50705, 11707, 62445, 49627, 54327, 59852, 35270,
+	17310, 15380, 16703,  1106, 27633, 18712, 23743, 13267,
+	 3682,  4382, 45431, 22392, 41204, 40925,  4775,   953,
+	44949, 55003, 49689, 21942, 18267, 45287, 28338, 53065,
+	40090,   304, 47868, 10375,  6700, 43466, 38152, 48206,
+	27689, 23867, 52230, 51951,  6250, 47724, 24260, 24960,
+	15375,  4899,  9930,  1009, 27536, 11939, 13262, 11332,
+	57885, 33303, 38828, 43528, 30710, 16935, 42450, 16516
+};
+
+static const uint16_t TT7[] = {
+	  585, 23667, 32462,  4435, 60735, 27192, 42895, 17482,
+	50967, 48287, 45874, 62780, 44098, 11093,  4354,  1673,
+	13505, 21115, 18884, 11876,  9364, 24042, 53145, 13580,
+	59318, 60461,  1231, 36193, 43707,  3779, 57840, 33207,
+	52870, 19007, 29145, 44132, 59648, 31214, 32727, 12057,
+	37267, 45141, 39280, 42570, 46442, 27621, 59365,  7054,
+	  836, 24549, 14177, 31316, 16482, 18383, 16899, 26985,
+	59232, 41815, 10205, 15856, 24715, 31961, 44768, 61362,
+	31793, 48387, 61194,  3927, 12786, 18437, 51340, 33923,
+	 1657, 11743, 10259, 12160, 61839, 14465,  4093, 27806,
+	21588, 33790,  1021, 46713, 50585, 53875, 48014, 55888,
+	16585, 60428, 61941, 33507, 49023, 64010,  9635, 40285,
+	59948, 35315, 24863, 49448, 56962, 27411, 32694, 33837,
+	15062, 40010,  4600, 19278, 16766,  9758,  7527, 15137,
+	26969, 24288, 17549, 49057, 30375, 47281, 44868, 42188,
+	11160, 50260,  1450, 32420, 24207, 60693,  4975, 28057
+};
+
 #endif
 
 /*
@@ -3463,12 +4407,21 @@ mq_poly_mul_ones_ntt(uint16_t *d, const uint16_t *a, unsigned logn)
 			a1 = _mm256_loadu_si256((void *)(a + u + 128));
 			b = _mm256_loadu_si256((void *)(TT7 + u));
 			x = _mm256_loadu_si256((void *)(NX + u));
+#if Q <= 19433
 			_mm256_storeu_si256((void *)(d + u),
 				mq_montymul_x16(b,
 					_mm256_add_epi16(a0,
 						mq_montymul_x16(a1, x))));
 			_mm256_storeu_si256((void *)(d + u + 128),
 				mq_montymul_x16(b, _mm256_add_epi16(a0, a1)));
+#else
+			_mm256_storeu_si256((void *)(d + u),
+				mq_montymul_x16(b,
+					mq_add_x16(a0,
+						mq_montymul_x16(a1, x))));
+			_mm256_storeu_si256((void *)(d + u + 128),
+				mq_montymul_x16(b, mq_add_x16(a0, a1)));
+#endif
 		}
 		break;
 	case 9:
@@ -3481,6 +4434,7 @@ mq_poly_mul_ones_ntt(uint16_t *d, const uint16_t *a, unsigned logn)
 			a3 = _mm256_loadu_si256((void *)(a + u + 384));
 			b = _mm256_loadu_si256((void *)(TT7 + u));
 			x = _mm256_loadu_si256((void *)(NX + u));
+#if Q <= 19433
 			b1x = mq_montymul_x16(b,
 				_mm256_sub_epi16(_mm256_set1_epi16(Q + R), x));
 			z = mq_montymul_x16(b, _mm256_add_epi16(a0,
@@ -3493,6 +4447,20 @@ mq_poly_mul_ones_ntt(uint16_t *d, const uint16_t *a, unsigned logn)
 			_mm256_storeu_si256((void *)(d + u + 256), z);
 			z = mq_add_x16(z, mq_montymul_x16(b1x, a3));
 			_mm256_storeu_si256((void *)(d + u + 384), z);
+#else
+			b1x = mq_montymul_x16(b,
+				mq_sub_x16(_mm256_set1_epi16(R), x));
+			z = mq_montymul_x16(b, mq_add_x16(a0,
+				mq_montymul_x16(x, mq_add_x16(
+					mq_add_x16(a1, a2), a3))));
+			_mm256_storeu_si256((void *)(d + u), z);
+			z = mq_add_x16(z, mq_montymul_x16(b1x, a1));
+			_mm256_storeu_si256((void *)(d + u + 128), z);
+			z = mq_add_x16(z, mq_montymul_x16(b1x, a2));
+			_mm256_storeu_si256((void *)(d + u + 256), z);
+			z = mq_add_x16(z, mq_montymul_x16(b1x, a3));
+			_mm256_storeu_si256((void *)(d + u + 384), z);
+#endif
 		}
 		break;
 	case 10:
@@ -3510,6 +4478,7 @@ mq_poly_mul_ones_ntt(uint16_t *d, const uint16_t *a, unsigned logn)
 			a7 = _mm256_loadu_si256((void *)(a + u + 896));
 			b = _mm256_loadu_si256((void *)(TT7 + u));
 			x = _mm256_loadu_si256((void *)(NX + u));
+#if Q <= 19433
 			b1x = mq_montymul_x16(b,
 				_mm256_sub_epi16(_mm256_set1_epi16(Q + R), x));
 			z = mq_montymul_x16(b, _mm256_add_epi16(a0,
@@ -3535,6 +4504,33 @@ mq_poly_mul_ones_ntt(uint16_t *d, const uint16_t *a, unsigned logn)
 			_mm256_storeu_si256((void *)(d + u + 768), z);
 			z = mq_add_x16(z, mq_montymul_x16(b1x, a7));
 			_mm256_storeu_si256((void *)(d + u + 896), z);
+#else
+			b1x = mq_montymul_x16(b,
+				mq_sub_x16(_mm256_set1_epi16(R), x));
+			z = mq_montymul_x16(b, mq_add_x16(a0,
+				mq_montymul_x16(x, mq_add_x16(
+					mq_add_x16(
+						mq_add_x16(a1, a2),
+						mq_add_x16(a3, a4)),
+					mq_add_x16(
+						mq_add_x16(a5, a6),
+						a7)))));
+			_mm256_storeu_si256((void *)(d + u), z);
+			z = mq_add_x16(z, mq_montymul_x16(b1x, a1));
+			_mm256_storeu_si256((void *)(d + u + 128), z);
+			z = mq_add_x16(z, mq_montymul_x16(b1x, a2));
+			_mm256_storeu_si256((void *)(d + u + 256), z);
+			z = mq_add_x16(z, mq_montymul_x16(b1x, a3));
+			_mm256_storeu_si256((void *)(d + u + 384), z);
+			z = mq_add_x16(z, mq_montymul_x16(b1x, a4));
+			_mm256_storeu_si256((void *)(d + u + 512), z);
+			z = mq_add_x16(z, mq_montymul_x16(b1x, a5));
+			_mm256_storeu_si256((void *)(d + u + 640), z);
+			z = mq_add_x16(z, mq_montymul_x16(b1x, a6));
+			_mm256_storeu_si256((void *)(d + u + 768), z);
+			z = mq_add_x16(z, mq_montymul_x16(b1x, a7));
+			_mm256_storeu_si256((void *)(d + u + 896), z);
+#endif
 		}
 		break;
 	}
@@ -3546,9 +4542,15 @@ mq_poly_mul_ones_ntt(uint16_t *d, const uint16_t *a, unsigned logn)
 			a0 = a[u];
 			a1 = a[u + 1];
 			b = TT7[u >> 1];
+#if Q <= 19433
 			d[u] = mq_montyred(
 				b * (a0 + mq_montyred(a1 * NX[u >> 1])));
 			d[u + 1] = mq_montyred(b * (a0 + a1));
+#else
+			d[u] = mq_montymul(b, mq_add(a0,
+				mq_montymul(a1, NX[u >> 1])));
+			d[u + 1] = mq_montymul(b, mq_add(a0, a1));
+#endif
 		}
 		break;
 	case 9:
@@ -3561,6 +4563,7 @@ mq_poly_mul_ones_ntt(uint16_t *d, const uint16_t *a, unsigned logn)
 			a3 = a[u + 3];
 			b = TT7[u >> 2];
 			x = NX[u >> 2];
+#if Q <= 19433
 			d[u] = mq_montyred(
 				b * (a0 + mq_montyred(x * (a1 + a2 + a3))));
 			d[u + 1] = mq_montyred(
@@ -3569,6 +4572,18 @@ mq_poly_mul_ones_ntt(uint16_t *d, const uint16_t *a, unsigned logn)
 				b * (a0 + a1 + a2 + mq_montyred(x * a3)));
 			d[u + 3] = mq_montyred(
 				b * (a0 + a1 + a2 + a3));
+#else
+			d[u] = mq_montymul(b, mq_add(a0, mq_montymul(x,
+				mq_add(mq_add(a1, a2), a3))));
+			d[u + 1] = mq_montymul(b, mq_add(
+				mq_add(a0, a1),
+				mq_montymul(x, mq_add(a2, a3))));
+			d[u + 2] = mq_montymul(b, mq_add(
+				mq_add(a0, a1),
+				mq_add(a2, mq_montymul(x, a3))));
+			d[u + 3] = mq_montymul(b, mq_add(
+				mq_add(a0, a1), mq_add(a2, a3)));
+#endif
 		}
 		break;
 	case 10:
@@ -3586,6 +4601,7 @@ mq_poly_mul_ones_ntt(uint16_t *d, const uint16_t *a, unsigned logn)
 			a7 = a[u + 7];
 			b = TT7[u >> 3];
 			x = NX[u >> 3];
+#if Q <= 19433
 			d[u] = mq_montyred(
 				b * (a0 + mq_montyred(
 				x * (a1 + a2 + a3 + a4 + a5 + a6 + a7))));
@@ -3609,6 +4625,71 @@ mq_poly_mul_ones_ntt(uint16_t *d, const uint16_t *a, unsigned logn)
 				+ mq_montyred(x * a7)));
 			d[u + 7] = mq_montyred(
 				b * (a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7));
+#else
+			d[u] = mq_montymul(b, mq_add(a0, mq_montymul(x,
+				mq_add(
+					mq_add(
+						mq_add(a1, a2),
+						mq_add(a3, a4)),
+					mq_add(
+						mq_add(a5, a6),
+						a7)))));
+			d[u + 1] = mq_montymul(b, mq_add(
+				mq_add(a0, a1),
+				mq_montymul(x, mq_add(
+					mq_add(
+						mq_add(a2, a3),
+						mq_add(a4, a5)),
+					mq_add(a6, a7)))));
+			d[u + 2] = mq_montymul(b, mq_add(
+				mq_add(
+					mq_add(a0, a1),
+					a2),
+				mq_montymul(x, mq_add(
+					mq_add(
+						mq_add(a3, a4),
+						mq_add(a5, a6)),
+					a7))));
+			d[u + 3] = mq_montymul(b, mq_add(
+				mq_add(
+					mq_add(a0, a1),
+					mq_add(a2, a3)),
+				mq_montymul(x, mq_add(
+					mq_add(a4, a5),
+					mq_add(a6, a7)))));
+			d[u + 4] = mq_montymul(b, mq_add(
+				mq_add(
+					mq_add(
+						mq_add(a0, a1),
+						mq_add(a2, a3)),
+					a4),
+				mq_montymul(x, mq_add(
+					mq_add(a5, a6),
+					a7))));
+			d[u + 5] = mq_montymul(b, mq_add(
+				mq_add(
+					mq_add(
+						mq_add(a0, a1),
+						mq_add(a2, a3)),
+					mq_add(a4, a5)),
+				mq_montymul(x, mq_add(a6, a7))));
+			d[u + 6] = mq_montymul(b, mq_add(
+				mq_add(
+					mq_add(
+						mq_add(a0, a1),
+						mq_add(a2, a3)),
+					mq_add(
+						mq_add(a4, a5),
+						a6)),
+				mq_montymul(x, a7)));
+			d[u + 7] = mq_montymul(b, mq_add(
+				mq_add(
+					mq_add(a0, a1),
+					mq_add(a2, a3)),
+				mq_add(
+					mq_add(a4, a5),
+					mq_add(a6, a7))));
+#endif
 		}
 		break;
 	}

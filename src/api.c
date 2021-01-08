@@ -5,7 +5,7 @@
  * literal constants only).
  */
 
-#if !defined Q || !defined N || !defined LOGN
+#if !defined Q || !defined N || !defined LOGN || !defined LVLBYTES
 #error This module must not be compiled separately.
 #endif
 
@@ -58,26 +58,87 @@ make_rr(Zn(private_key) *sk)
 }
 
 /*
- * Initialize a SHAKE256 context with the label for key derivation
- * and the plaintext s (in sbuf[]). Upon return, the context is in
- * production mode.
+ * Compute the hash function Hash_m(), used over the plaintext polynomial
+ * 's' to generate the encryption seed. Output size matches the security
+ * level.
  */
 static void
-init_kdf_good(shake_context *sc, const void *sbuf, size_t sbuf_len)
+hash_m(void *dst, const void *sbuf, size_t sbuf_len)
+{
+	shake_context sc;
+	const char *label;
+
+	label = "BAT-hash_m-" XSTR(Q) "-" XSTR(N) ":";
+	shake_init(&sc, 256);
+	shake_inject(&sc, label, strlen(label));
+	shake_inject(&sc, sbuf, sbuf_len);
+	shake_flip(&sc);
+	shake_extract(&sc, dst, LVLBYTES);
+}
+
+/*
+ * Compute the hash function Hash_s(), used over the message m to
+ * generate the seed for encryption. Seed size is always exactly 32
+ * bytes.
+ */
+static void
+hash_s(void *seed, const void *m, size_t m_len)
+{
+	shake_context sc;
+	const char *label;
+
+	label = "BAT-hash_s-" XSTR(Q) "-" XSTR(N) ":";
+	shake_init(&sc, 256);
+	shake_inject(&sc, label, strlen(label));
+	shake_inject(&sc, m, m_len);
+	shake_flip(&sc);
+	shake_extract(&sc, seed, 32);
+}
+
+/*
+ * Sample the polynomial s using the provided seed (as part of
+ * encryption).
+ */
+static void
+sample_s(void *sbuf, size_t sbuf_len, const void *seed)
+{
+	shake_context sc;
+	const char *label;
+
+	label = "BAT-sample_s-" XSTR(Q) "-" XSTR(N) ":";
+	shake_init(&sc, 256);
+	shake_inject(&sc, label, strlen(label));
+	shake_inject(&sc, seed, 32);
+	shake_flip(&sc);
+	shake_extract(&sc, sbuf, sbuf_len);
+}
+
+/*
+ * Initialize a SHAKE256 context with the label for key derivation
+ * and the plaintext s (in sbuf[]). Upon return, the context is in
+ * production mode. The key derivation function is called Hash_k()
+ * in the BAT specification.
+ */
+static void
+init_kdf_good(shake_context *sc,
+	const Zn(ciphertext) *ct, const void *m, size_t m_len)
 {
 	const char *label;
 
 	label = "BAT-kdf-good-" XSTR(Q) "-" XSTR(N) ":";
 	shake_init(sc, 256);
 	shake_inject(sc, label, strlen(label));
-	shake_inject(sc, sbuf, sbuf_len);
+	shake_inject(sc, m, m_len);
+	shake_inject(sc, ct->c, sizeof ct->c);
+	shake_inject(sc, ct->c2, sizeof ct->c2);
 	shake_flip(sc);
 }
 
 /*
  * Initialize a SHAKE256 context with the label for alternate key
  * derivation, to be used on decapsulation failure. Upon return, the
- * context is in production mode.
+ * context is in production mode. This function is called F() in the
+ * BAT specification.
  */
 static void
 init_kdf_bad(shake_context *sc,
@@ -90,6 +151,7 @@ init_kdf_bad(shake_context *sc,
 	shake_inject(sc, label, strlen(label));
 	shake_inject(sc, sk->rr, sizeof sk->rr);
 	shake_inject(sc, ct->c, sizeof ct->c);
+	shake_inject(sc, ct->c2, sizeof ct->c2);
 	shake_flip(sc);
 }
 
@@ -97,11 +159,12 @@ init_kdf_bad(shake_context *sc,
  * Make the secret value from the plaintext s.
  */
 static void
-make_secret(void *secret, size_t secret_len, const void *sbuf, size_t sbuf_len)
+make_secret(void *secret, size_t secret_len,
+	const Zn(ciphertext) *ct, const void *m, size_t m_len)
 {
 	shake_context sc;
 
-	init_kdf_good(&sc, sbuf, sbuf_len);
+	init_kdf_good(&sc, ct, m, m_len);
 	shake_extract(&sc, secret, secret_len);
 }
 
@@ -168,7 +231,7 @@ get_privkey_length(const Zn(private_key) *sk, int short_format)
 				sk->F, LOGN, bat_max_FG_bits[LOGN])
 			+ bat_trim_i8_encode(NULL, 0,
 				sk->G, LOGN, bat_max_FG_bits[LOGN])
-			+ bat_trim_i16_encode(NULL, 0,
+			+ bat_trim_i32_encode(NULL, 0,
 				sk->w, LOGN, bat_max_w_bits[LOGN])
 			+ XCAT(bat_encode_, Q)(NULL, 0, sk->h, LOGN);
 	}
@@ -236,7 +299,7 @@ Zn(encode_private_key)(void *out, size_t max_out_len,
 			return 0;
 		}
 		off += len;
-		len = bat_trim_i16_encode(buf + off, out_len - off,
+		len = bat_trim_i32_encode(buf + off, out_len - off,
 			sk->w, LOGN, bat_max_w_bits[LOGN]);
 		if (len == 0) {
 			/* This should never happen in practice. */
@@ -333,7 +396,7 @@ Zn(decode_private_key)(Zn(private_key) *sk, const void *in, size_t max_in_len,
 			return 0;
 		}
 		off += len;
-		len = bat_trim_i16_decode(sk->w, LOGN, bat_max_w_bits[LOGN],
+		len = bat_trim_i32_decode(sk->w, LOGN, bat_max_w_bits[LOGN],
 			buf + off, max_in_len - off);
 		if (len == 0) {
 			return 0;
@@ -402,7 +465,8 @@ Zn(encode_ciphertext)(void *out, size_t max_out_len, const Zn(ciphertext) *ct)
 	uint8_t *buf;
 	size_t out_len, len, off;
 
-	out_len = 1 + XCAT(bat_encode_ciphertext_, Q)(NULL, 0, ct->c, LOGN);
+	out_len = 1 + XCAT(bat_encode_ciphertext_, Q)(NULL, 0, ct->c, LOGN)
+		+ sizeof ct->c2;
 	if (out == NULL) {
 		return out_len;
 	}
@@ -418,6 +482,8 @@ Zn(encode_ciphertext)(void *out, size_t max_out_len, const Zn(ciphertext) *ct)
 		return 0;
 	}
 	off += len;
+	memcpy(buf + off, ct->c2, sizeof ct->c2);
+	off += sizeof ct->c2;
 	return off;
 }
 
@@ -442,6 +508,11 @@ Zn(decode_ciphertext)(Zn(ciphertext) *ct, const void *in, size_t max_in_len)
 		return 0;
 	}
 	off += len;
+	if (max_in_len - off < sizeof ct->c2) {
+		return 0;
+	}
+	memcpy(ct->c2, buf + off, sizeof ct->c2);
+	off += sizeof ct->c2;
 	return off;
 }
 
@@ -464,32 +535,51 @@ Zn(encapsulate)(void *secret, size_t secret_len,
 	 * efficient to use the random seed from the OS directly.
 	 */
 	for (;;) {
-		uint8_t sbuf[SBUF_LEN(LOGN)];
+		uint8_t m[LVLBYTES], seed[32], sbuf[SBUF_LEN(LOGN)];
+		size_t u;
 
 		/*
-		 * We request n bits from the OS, i.e. up to 1024 bits.
-		 * We do not try to get a shorter seed and then
-		 * expand it: if the OS RNG is especially slow, then this
-		 * expansion would be implemented in bat_get_seed() itself.
+		 * Get a random message m from the OS.
 		 */
-		if (!bat_get_seed(sbuf, sizeof sbuf)) {
+		if (!bat_get_seed(m, sizeof m)) {
 			return BAT_ERR_RANDOM;
 		}
 
+		/*
+		 * Use Hash_s() to get the encryption seed.
+		 */
+		hash_s(seed, m, sizeof m);
+
+		/*
+		 * Derive the seed into the polynomial s.
+		 */
+		sample_s(sbuf, sizeof sbuf, seed);
 #if N < 8
 		/* For very reduced toy versions, we don't even have a
 		   full byte, and we must clear the unused bits. */
 		sbuf[0] &= (1u << N) - 1u;
 #endif
 
-		if (!XCAT(bat_encapsulate_, Q)(ct->c, sbuf, pk->h, LOGN, tmp)) {
+		/*
+		 * Compute c1. This may fail (rarely!) only for q = 769.
+		 */
+		if (!XCAT(bat_encrypt_, Q)(ct->c, sbuf, pk->h, LOGN, tmp)) {
 			continue;
 		}
 
 		/*
-		 * Produce the secret as a hash of sbuf.
+		 * Make c2 = Hash_m(s) XOR m.
 		 */
-		make_secret(secret, secret_len, sbuf, sizeof sbuf);
+		hash_m(ct->c2, sbuf, sizeof sbuf);
+		for (u = 0; u < sizeof m; u ++) {
+			ct->c2[u] ^= m[u];
+		}
+
+		/*
+		 * Produce the shared secret (output of a successful key
+		 * exchange).
+		 */
+		make_secret(secret, secret_len, ct, m, sizeof m);
 
 		return 0;
 	}
@@ -501,8 +591,9 @@ Zn(decapsulate)(void *secret, size_t secret_len,
 	const Zn(ciphertext) *ct, const Zn(private_key) *sk,
 	void *tmp, size_t tmp_len)
 {
-	uint8_t sbuf[SBUF_LEN(LOGN)];
-	int8_t *c2;
+	uint8_t sbuf[SBUF_LEN(LOGN)], m[LVLBYTES];
+	uint8_t sbuf_alt[SBUF_LEN(LOGN)], seed[32];
+	int8_t *c_alt;
 	size_t u;
 	uint32_t d;
 	uint8_t *secret_buf;
@@ -514,36 +605,51 @@ Zn(decapsulate)(void *secret, size_t secret_len,
 	}
 
 	/*
-	 * Decapsulation properly said never fails (at least, it never
-	 * reports a failure).
+	 * Inner decryption never fails (at least, it never reports
+	 * a failure).
 	 */
-	XCAT(bat_decapsulate_, Q)(sbuf, ct->c,
+	XCAT(bat_decrypt_, Q)(sbuf, ct->c,
 		sk->f, sk->g, sk->F, sk->G, sk->w, LOGN, tmp);
 
 	/*
-	 * We re-encapsulate the obtained plaintext (in sbuf[]) to
-	 * check whether that would yield the same ciphertext as
-	 * what we received. Note that the temporary buffer is
-	 * always large enough for both that recomputed ciphertext
-	 * and the temporary area needed by encapsulation.
+	 * From sbuf, we derive the mask that allows recovery of m
+	 * out of the second ciphertext half (c2).
 	 */
-	c2 = tmp;
-	tmp = tmp_align((void *)(c2 + N), ZN(TMP_DECAPS) - N,
+	hash_m(m, sbuf, sizeof sbuf);
+	for (u = 0; u < sizeof m; u ++) {
+		m[u] ^= ct->c2[u];
+	}
+
+	/*
+	 * Decryption is valid if and only if we can reencrypt the
+	 * obtained message m and get the exact same polynomial s
+	 * and ciphertext c1.
+	 */
+	hash_s(seed, m, sizeof m);
+	sample_s(sbuf_alt, sizeof sbuf_alt, seed);
+#if N < 8
+	sbuf_alt[0] &= (1u << N) - 1u;
+#endif
+	c_alt = tmp;
+	tmp = tmp_align((void *)(c_alt + N), ZN(TMP_DECAPS) - N,
 		ZN(TMP_ENCAPS) - 7);
 	if (tmp == NULL) {
 		/* This should never happen in practice. */
 		return BAT_ERR_NOSPACE;
 	}
-	d = XCAT(bat_encapsulate_, Q)(c2, sbuf, sk->h, LOGN, tmp);
+	d = XCAT(bat_encrypt_, Q)(c_alt, sbuf_alt, sk->h, LOGN, tmp);
 	d --;
 	for (u = 0; u < sizeof sbuf; u ++) {
-		d |= (uint32_t)(ct->c[u] - c2[u]);
+		d |= sbuf[u] ^ sbuf_alt[u];
+	}
+	for (u = 0; u < sizeof ct->c; u ++) {
+		d |= (uint32_t)(ct->c[u] - c_alt[u]);
 	}
 
 	/*
 	 * If encapsulation worked AND yielded the same ciphertext as
 	 * received, then d == 0 at this point, and we want to produce
-	 * the secret key as a hash of sbuf. Otherwise, d != 0, and we
+	 * the secret key as a hash of m. Otherwise, d != 0, and we
 	 * must produce the secret as a hash of the received ciphertext
 	 * and the secret value r (stored in sk->rr). We MUST NOT leak
 	 * which was the case, and therefore we must always compute
@@ -551,7 +657,7 @@ Zn(decapsulate)(void *secret, size_t secret_len,
 	 */
 	init_kdf_bad(&sc, sk, ct);
 	shake_extract(&sc, secret, secret_len);
-	init_kdf_good(&sc, sbuf, sizeof sbuf);
+	init_kdf_good(&sc, ct, m, sizeof m);
 	d = ((uint32_t)(d | -d) >> 31) - 1;
 	secret_buf = secret;
 	for (u = 0; u < secret_len; u ++) {

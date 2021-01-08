@@ -337,7 +337,7 @@ Bn(q, n, encapsulate_nofo)(void *ctx, unsigned long num) \
  \
 	bc = ctx; \
 	while (num -- > 0) { \
-		if (!XCAT(bat_encapsulate_, q)(bc->ct.c, bc->sbuf, \
+		if (!XCAT(bat_encrypt_, q)(bc->ct.c, bc->sbuf, \
 			bc->pk.h, bc->logn, (uint32_t *)bc->tmp)) \
 		{ \
 			return -1; \
@@ -353,10 +353,10 @@ Bn(q, n, decapsulate_nofo)(void *ctx, unsigned long num) \
  \
 	bc = ctx; \
 	while (num -- > 0) { \
-		XCAT(bat_decapsulate_, q)(bc->sbuf, bc->ct.c, \
+		XCAT(bat_decrypt_, q)(bc->sbuf, bc->ct.c, \
 			bc->sk.f, bc->sk.g, bc->sk.F, bc->sk.G, \
 			bc->sk.w, bc->logn, (uint32_t *)bc->tmp); \
-		XCAT(bat_encapsulate_, q)(bc->ct.c, bc->sbuf, \
+		XCAT(bat_encrypt_, q)(bc->ct.c, bc->sbuf, \
 			bc->pk.h, bc->logn, (uint32_t *)bc->tmp); \
 	} \
 	return 0; \

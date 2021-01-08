@@ -36,7 +36,7 @@ bat_make_public_257(uint16_t *h, const int8_t *f, const int8_t *g,
 
 /* see inner.h */
 uint32_t
-bat_encapsulate_257(int8_t *c, const uint8_t *sbuf,
+bat_encrypt_257(int8_t *c, const uint8_t *sbuf,
 	const uint16_t *h, unsigned logn, uint32_t *tmp)
 {
 	size_t u, n;
@@ -95,9 +95,9 @@ bat_encapsulate_257(int8_t *c, const uint8_t *sbuf,
 
 /* see inner.h */
 void
-bat_decapsulate_257(uint8_t *sbuf, const int8_t *c,
+bat_decrypt_257(uint8_t *sbuf, const int8_t *c,
 	const int8_t *f, const int8_t *g, const int8_t *F, const int8_t *G,
-	const int16_t *w, unsigned logn, uint32_t *tmp)
+	const int32_t *w, unsigned logn, uint32_t *tmp)
 {
 	/*
 	 * Decapsulation algorithm:
@@ -136,7 +136,7 @@ bat_decapsulate_257(uint8_t *sbuf, const int8_t *c,
 	 *        q'*Q*F*c = 0 mod Q
 	 *        q'*F*ones mod Q  is a constant polynomial
 	 *        q'*G*ones mod Q  is a constant polynomial
-	 *        c' mod Q  is a constant polynomials, either 0 or ones;
+	 *        c' mod Q  is a constant polynomial, either 0 or ones;
 	 *        thus, c'*w is a constant polynomial modulo Q.
 	 *
 	 *     Modulo q', q'*Q*F*c, q'*F*ones and q'*G*ones are zero,
@@ -209,7 +209,7 @@ bat_decapsulate_257(uint8_t *sbuf, const int8_t *c,
 	 * t3 <- q'*F mod q      (NTT)
 	 */
 	for (u = 0; u < n; u ++) {
-		t3[u] = mq_set(F[u] * (3329 % 257));
+		t3[u] = mq_set((int32_t)F[u] * (64513 % 257));
 	}
 	NTT(t3, t3, logn);
 	mq_poly_mul_ntt(t1, t1, t3, logn);
@@ -225,7 +225,7 @@ bat_decapsulate_257(uint8_t *sbuf, const int8_t *c,
 	 * t1 <- q'*Q*F*c - q'*F*ones - q'*G*ones mod q  (NTT)
 	 */
 	for (u = 0; u < n; u ++) {
-		t3[u] = mq_set(G[u] * (3329 % 257));
+		t3[u] = mq_set((int32_t)G[u] * (64513 % 257));
 	}
 	NTT(t3, t3, logn);
 	mq_poly_mul_ones_ntt(t3, t3, logn);
@@ -365,15 +365,15 @@ bat_decapsulate_257(uint8_t *sbuf, const int8_t *c,
 		 */
 		y0 = mq_unorm(t1[u]);
 		y1 = (uint32_t)*(int16_t *)&t3[u];
-		y1 += 3329 & (y1 >> 16);
+		y1 += 64513 & (y1 >> 16);
 
 		/*
-		 * The Montgomery representation of 1/q' mod q is 107
-		 * (with q = 257 and q' = 3329). We add 3598 = 14*257 to
+		 * The Montgomery representation of 1/q' mod q is 43
+		 * (with q = 257 and q' = 64513). We add 64764 = 252*257 to
 		 * ensure that the value provided to mq_montyred() is in
-		 * the proper range (max value will be 107*256).
+		 * the proper range (max value will be 43*(256+64764)).
 		 */
-		x = mq_montyred(107 * (3598 + y0 - y1));
+		x = mq_montyred(43 * (64764 + y0 - y1));
 
 		/*
 		 * Value x is in 1..q range. We need to normalize value
@@ -384,27 +384,27 @@ bat_decapsulate_257(uint8_t *sbuf, const int8_t *c,
 		/*
 		 * Compute value modulo q*q', in 0..q*q'-1 range.
 		 */
-		x = (x * 3329) + (uint32_t)y1;
+		x = (x * 64513) + (uint32_t)y1;
 
 		/*
-		 * If x = 0, set it to q*q' = 855553.
+		 * If x = 0, set it to q*q' = 16579841.
 		 */
-		x += 855553 & -((uint32_t)(x - 1) >> 31);
+		x += 16579841 & -((uint32_t)(x - 1) >> 31);
 
 		/*
 		 * Adjust parity to get value modulo 2*q*q': we subtract
-		 * q*q' = 855553 if the value has the wrong parity.
+		 * q*q' = 16579841 if the value has the wrong parity.
 		 */
-		x -= 855553 & -(uint32_t)((x & 1) ^ cs2);
+		x -= 16579841 & -(uint32_t)((x & 1) ^ cs2);
 
 		/*
-		 * Value is now in -855552..+855553, which is the correct
+		 * Value is now in -8289920..+8289920, which is the correct
 		 * normalized range. Since we will hand it over to the
 		 * module that computes modulo 769, we pre-reduce it
 		 * modulo 769. We ensure a positive value by adding
-		 * 855897 = 769 * 1113.
+		 * 8290589 = 769 * 10781.
 		 */
-		t1[u] = m769_tomonty(x + 855897);
+		t1[u] = m769_tomonty(x + 8290589);
 	}
 
 	/*
@@ -434,8 +434,8 @@ bat_decapsulate_257(uint8_t *sbuf, const int8_t *c,
 	 * q*q'*Q*s' in t2[], in Montgomery representation modulo 769:
 	 *
 	 *    s'   s   t2[]
-	 *  -1/2   0   384    (-q*q'*Q/2 = 344 mod 769)
-	 *  +1/2   1   385    (+q*q'*Q/2 = 425 mod 769)
+	 *  -1/2   0    26    (-q*q'*Q/2 = 568 mod 769)
+	 *  +1/2   1   743    (+q*q'*Q/2 = 201 mod 769)
 	 *
 	 * Therefore, we just need to look at the least significant bit
 	 * of each value in t2[] to get the coefficients of s.
@@ -449,7 +449,7 @@ bat_decapsulate_257(uint8_t *sbuf, const int8_t *c,
 /* see inner.h */
 void
 bat_finish_decapsulate_257(uint16_t *cp, uint16_t *cs,
-	const int8_t *f, const int8_t *F, const int16_t *w, unsigned logn,
+	const int8_t *f, const int8_t *F, const int32_t *w, unsigned logn,
 	uint32_t *tmp)
 {
 	/*
@@ -493,11 +493,11 @@ bat_finish_decapsulate_257(uint16_t *cp, uint16_t *cs,
 	 */
 	for (u = 0; u < n; u ++) {
 		/*
-		 * 426363 = 257 * 1659.
-		 * This addition ensures that q'*F[u] becomes a positive
-		 * integer, thus in range for mq_tomonty().
+		 * 771 = 257 * 3.
+		 * This addition ensures that (q' mod q)*F[u] becomes a
+		 * positive integer, thus in range for mq_tomonty().
 		 */
-		t2[u] = mq_tomonty((int32_t)F[u] * 3329 + 426363);
+		t2[u] = mq_tomonty((int32_t)F[u] * (64513 % 257) + 771);
 	}
 	NTT(t2, t2, logn);
 
