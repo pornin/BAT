@@ -129,8 +129,15 @@ init_kdf_good(shake_context *sc,
 	shake_init(sc, 256);
 	shake_inject(sc, label, strlen(label));
 	shake_inject(sc, m, m_len);
+
+	/* We ignore the ciphertext here. A previous BAT version hashed
+	   it along the message but this is in fact not needed. */
+	(void)ct;
+	/*
 	shake_inject(sc, ct->c, sizeof ct->c);
 	shake_inject(sc, ct->c2, sizeof ct->c2);
+	*/
+
 	shake_flip(sc);
 }
 
