@@ -167,6 +167,7 @@ typedef struct { \
 	uint8_t secret[32]; \
 	unsigned logn; \
 	uint8_t *sbuf; \
+	uint8_t randm[32]; \
 } Bn(q, n, context); \
  \
 static int \
@@ -300,12 +301,16 @@ static int \
 Bn(q, n, encapsulate)(void *ctx, unsigned long num) \
 { \
 	Bn(q, n, context) *bc; \
+	extern int Zn(q, n, encapsulate_benchmark_only)(void *, size_t, \
+		Zn(q, n, ciphertext) *, const Zn(q, n, public_key) *, \
+		const uint8_t *, void *, size_t); \
  \
 	bc = ctx; \
 	while (num -- > 0) { \
-		if (Zn(q, n, encapsulate)( \
+		if (Zn(q, n, encapsulate_benchmark_only)( \
 			bc->secret, sizeof bc->secret, \
-			&bc->ct, &bc->pk, bc->tmp, bc->tmp_len) != 0) \
+			&bc->ct, &bc->pk, bc->randm, \
+			bc->tmp, bc->tmp_len) != 0) \
 		{ \
 			return -1; \
 		} \
@@ -381,6 +386,10 @@ Bn(q, n, all)(double threshold) \
 	for (bc.logn = 1; (1u << bc.logn) < n; bc.logn ++); \
 	bc.sbuf = xmalloc(SBUF_LEN(bc.logn)); \
 	if (!bat_get_seed(bc.sbuf, SBUF_LEN(bc.logn))) { \
+		fprintf(stderr, "ERR: bat_get_seed() failed\n"); \
+		exit(EXIT_FAILURE); \
+	} \
+	if (!bat_get_seed(bc.randm, sizeof bc.randm)) { \
 		fprintf(stderr, "ERR: bat_get_seed() failed\n"); \
 		exit(EXIT_FAILURE); \
 	} \
@@ -516,6 +525,38 @@ MK_BENCH_FUNS(128, 256)
 MK_BENCH_FUNS(257, 512)
 MK_BENCH_FUNS(769, 1024)
 
+/*
+static int
+bench_shake_inner(void *ctx, unsigned long num)
+{
+	while (num -- > 0) {
+		shake_context sc;
+
+		shake_init(&sc, 256);
+		shake_inject(&sc, ctx, 32);
+		shake_flip(&sc);
+		shake_extract(&sc, ctx, 32);
+	}
+	return 0;
+}
+
+static void
+bench_shake(double threshold)
+{
+	double r;
+	uint8_t buf[32];
+
+	bat_get_seed(buf, sizeof buf);
+	r = do_bench(bench_shake_inner, buf, threshold);
+#if DO_BENCH86
+	printf("SHAKE: %8.0f\n", r);
+#else
+	printf("SHAKE: %8.2f\n", r / 1000.0);
+#endif
+	fflush(stdout);
+}
+*/
+
 int
 main(int argc, char *argv[])
 {
@@ -540,6 +581,7 @@ main(int argc, char *argv[])
 #else
 	printf("time threshold = %.4f s\n", threshold);
 #endif
+
 	printf("esk / dsk = encode / decode private key (s = short format, l = long format)\n");
 	printf("epk / dpk = encode / decode public key\n");
 	printf("ect / dct = encode / decode ciphertext\n");

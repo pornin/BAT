@@ -47,11 +47,17 @@ static void
 make_rr(Zn(private_key) *sk)
 {
 	shake_context sc;
-	const char *label;
+	uint8_t label[7];
 
-	label = "BAT-rr-" XSTR(Q) "-" XSTR(N) ":";
+	label[0] = 0x42;
+	label[1] = 0x41;
+	label[2] = 0x54;
+	label[3] = (uint8_t)(Q >> 8);
+	label[4] = (uint8_t)Q;
+	label[5] = LOGN;
+	label[6] = 0x72; /* 'r' */
 	shake_init(&sc, 256);
-	shake_inject(&sc, label, strlen(label));
+	shake_inject(&sc, label, sizeof label);
 	shake_inject(&sc, sk->seed, sizeof sk->seed);
 	shake_flip(&sc);
 	shake_extract(&sc, sk->rr, sizeof sk->rr);
@@ -66,11 +72,17 @@ static void
 hash_m(void *dst, const void *sbuf, size_t sbuf_len)
 {
 	shake_context sc;
-	const char *label;
+	uint8_t label[7];
 
-	label = "BAT-hash_m-" XSTR(Q) "-" XSTR(N) ":";
+	label[0] = 0x42;
+	label[1] = 0x41;
+	label[2] = 0x54;
+	label[3] = (uint8_t)(Q >> 8);
+	label[4] = (uint8_t)Q;
+	label[5] = LOGN;
+	label[6] = 0x6D; /* 'm' */
 	shake_init(&sc, 256);
-	shake_inject(&sc, label, strlen(label));
+	shake_inject(&sc, label, sizeof label);
 	shake_inject(&sc, sbuf, sbuf_len);
 	shake_flip(&sc);
 	shake_extract(&sc, dst, LVLBYTES);
@@ -85,11 +97,17 @@ static void
 hash_s(void *seed, const void *m, size_t m_len)
 {
 	shake_context sc;
-	const char *label;
+	uint8_t label[7];
 
-	label = "BAT-hash_s-" XSTR(Q) "-" XSTR(N) ":";
+	label[0] = 0x42;
+	label[1] = 0x41;
+	label[2] = 0x54;
+	label[3] = (uint8_t)(Q >> 8);
+	label[4] = (uint8_t)Q;
+	label[5] = LOGN;
+	label[6] = 0x73; /* 's' */
 	shake_init(&sc, 256);
-	shake_inject(&sc, label, strlen(label));
+	shake_inject(&sc, label, sizeof label);
 	shake_inject(&sc, m, m_len);
 	shake_flip(&sc);
 	shake_extract(&sc, seed, 32);
@@ -103,11 +121,17 @@ static void
 sample_s(void *sbuf, size_t sbuf_len, const void *seed)
 {
 	shake_context sc;
-	const char *label;
+	uint8_t label[7];
 
-	label = "BAT-sample_s-" XSTR(Q) "-" XSTR(N) ":";
+	label[0] = 0x42;
+	label[1] = 0x41;
+	label[2] = 0x54;
+	label[3] = (uint8_t)(Q >> 8);
+	label[4] = (uint8_t)Q;
+	label[5] = LOGN;
+	label[6] = 0x74; /* 't' */
 	shake_init(&sc, 256);
-	shake_inject(&sc, label, strlen(label));
+	shake_inject(&sc, label, sizeof label);
 	shake_inject(&sc, seed, 32);
 	shake_flip(&sc);
 	shake_extract(&sc, sbuf, sbuf_len);
@@ -123,11 +147,17 @@ static void
 init_kdf_good(shake_context *sc,
 	const Zn(ciphertext) *ct, const void *m, size_t m_len)
 {
-	const char *label;
+	uint8_t label[7];
 
-	label = "BAT-kdf-good-" XSTR(Q) "-" XSTR(N) ":";
+	label[0] = 0x42;
+	label[1] = 0x41;
+	label[2] = 0x54;
+	label[3] = (uint8_t)(Q >> 8);
+	label[4] = (uint8_t)Q;
+	label[5] = LOGN;
+	label[6] = 0x67; /* 'g' */
 	shake_init(sc, 256);
-	shake_inject(sc, label, strlen(label));
+	shake_inject(sc, label, sizeof label);
 	shake_inject(sc, m, m_len);
 
 	/* We ignore the ciphertext here. A previous BAT version hashed
@@ -151,11 +181,17 @@ static void
 init_kdf_bad(shake_context *sc,
 	const Zn(private_key) *sk, const Zn(ciphertext) *ct)
 {
-	const char *label;
+	uint8_t label[7];
 
-	label = "BAT-kdf-bad-" XSTR(Q) "-" XSTR(N) ":";
+	label[0] = 0x42;
+	label[1] = 0x41;
+	label[2] = 0x54;
+	label[3] = (uint8_t)(Q >> 8);
+	label[4] = (uint8_t)Q;
+	label[5] = LOGN;
+	label[6] = 0x62; /* 'b' */
 	shake_init(sc, 256);
-	shake_inject(sc, label, strlen(label));
+	shake_inject(sc, label, sizeof label);
 	shake_inject(sc, sk->rr, sizeof sk->rr);
 	shake_inject(sc, ct->c, sizeof ct->c);
 	shake_inject(sc, ct->c2, sizeof ct->c2);
@@ -590,6 +626,72 @@ Zn(encapsulate)(void *secret, size_t secret_len,
 
 		return 0;
 	}
+}
+
+/*
+ * This version of encapsulate() is for internal benchmarking use only;
+ * instead of extracting a random seed from the operating system, it
+ * receives it from the caller; this avoids counting the cost of the
+ * OS PRNG (which we do not really control). The 'm' parameter MUST
+ * have length at least LVLBYTES.
+ *
+ * It may be argued that we could provide that as a useful API for
+ * callers who want to plug their own PRNG, but this seems dangerous in
+ * practice (the performance gain is slight, but the risk of
+ * catastrophic misuse is great).
+ */
+int
+Zn(encapsulate_benchmark_only)(void *secret, size_t secret_len,
+	Zn(ciphertext) *ct, const Zn(public_key) *pk,
+	const uint8_t *m, void *tmp, size_t tmp_len)
+{
+	uint8_t seed[32], sbuf[SBUF_LEN(LOGN)];
+	size_t u;
+
+	tmp = tmp_align(tmp, tmp_len, ZN(TMP_ENCAPS) - 7);
+	if (tmp == NULL) {
+		return BAT_ERR_NOSPACE;
+	}
+
+	/*
+	 * Use Hash_s() to get the encryption seed.
+	 */
+	hash_s(seed, m, LVLBYTES);
+
+	/*
+	 * Derive the seed into the polynomial s.
+	 */
+	sample_s(sbuf, sizeof sbuf, seed);
+#if N < 8
+	/* For very reduced toy versions, we don't even have a
+	   full byte, and we must clear the unused bits. */
+	sbuf[0] &= (1u << N) - 1u;
+#endif
+
+	/*
+	 * Compute c1. This may fail (rarely!) only for q = 769. Since
+	 * this function is used only for benchmarks, we do not report
+	 * the failure (it happens too rarely to change the result).
+	 */
+	if (!XCAT(bat_encrypt_, Q)(ct->c, sbuf, pk->h, LOGN, tmp)) {
+		(void)0; /* do nothing! */
+	}
+
+	/*
+	 * Make c2 = Hash_m(s) XOR m.
+	 */
+	hash_m(ct->c2, sbuf, sizeof sbuf);
+	for (u = 0; u < LVLBYTES; u ++) {
+		ct->c2[u] ^= m[u];
+	}
+
+	/*
+	 * Produce the shared secret (output of a successful key
+	 * exchange).
+	 */
+	make_secret(secret, secret_len, ct, m, LVLBYTES);
+
+	return 0;
 }
 
 /* see bat.h */

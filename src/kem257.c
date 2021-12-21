@@ -634,6 +634,200 @@ encode8(uint32_t *lo, uint32_t *hi, const uint16_t *x)
 	return r;
 }
 
+#if BAT_AVX2
+
+/*
+ * Eight encode8() in parallel. 64 input values (x[0..63]) are encoded
+ * into 64 consecutive bytes (buf[0..63]) and the eight extra bits are
+ * returned as a packed byte value.
+ */
+TARGET_AVX2
+static inline uint32_t
+encode8x8(uint8_t *buf, const uint16_t *x)
+{
+	__m256i xm4, xm16, xmlo32, xs, x83521;
+	__m256i xi0, xi1, xi2, xi3, xa0, xa1, xa2, xa3, xt0, xt1, xt2, xt3;
+
+	xm4 = _mm256_set1_epi16(0x0F);
+	xm16 = _mm256_set1_epi32(0xFFFF);
+	xmlo32 = _mm256_setr_epi32(-1, 0, 0, 0, -1, 0, 0, 0);
+	x83521 = _mm256_set1_epi64x(83521);
+
+	/*
+	 * Load the 64 values to encode.
+	 */
+	xi0 = _mm256_loadu_si256((const void *)(x +  0));
+	xi1 = _mm256_loadu_si256((const void *)(x + 16));
+	xi2 = _mm256_loadu_si256((const void *)(x + 32));
+	xi3 = _mm256_loadu_si256((const void *)(x + 48));
+
+	/*
+	 * Repack low nibbles to get low halves.
+	 */
+
+	/* Extract low 4 bits of each value. */
+	xa0 = _mm256_and_si256(xi0, xm4);
+	xa1 = _mm256_and_si256(xi1, xm4);
+	xa2 = _mm256_and_si256(xi2, xm4);
+	xa3 = _mm256_and_si256(xi3, xm4);
+
+	/* Pack two nibbles into one byte, and shuffle bytes to get
+	   one 32-bit word per AVX2 lane (two per register). */
+	xs = _mm256_setr_epi8(
+		0, 4, 8, 12, 1, 1, 1, 1,
+		1, 1, 1, 1, 1, 1, 1, 1,
+		0, 4, 8, 12, 1, 1, 1, 1,
+		1, 1, 1, 1, 1, 1, 1, 1);
+	xa0 = _mm256_shuffle_epi8(
+		_mm256_or_si256(xa0, _mm256_srli_epi32(xa0, 12)), xs);
+	xa1 = _mm256_shuffle_epi8(
+		_mm256_or_si256(xa1, _mm256_srli_epi32(xa1, 12)), xs);
+	xa2 = _mm256_shuffle_epi8(
+		_mm256_or_si256(xa2, _mm256_srli_epi32(xa2, 12)), xs);
+	xa3 = _mm256_shuffle_epi8(
+		_mm256_or_si256(xa3, _mm256_srli_epi32(xa3, 12)), xs);
+
+	/*
+	 * Extract high parts from each input value.
+	 */
+	xi0 = _mm256_srli_epi16(xi0, 4);
+	xi1 = _mm256_srli_epi16(xi1, 4);
+	xi2 = _mm256_srli_epi16(xi2, 4);
+	xi3 = _mm256_srli_epi16(xi3, 4);
+
+	/*
+	 * Combine high parts by pairs.
+	 */
+	xi0 = _mm256_add_epi32(
+		_mm256_add_epi32(xi0, _mm256_srli_epi32(xi0, 16)),
+		_mm256_srli_epi32(xi0, 12));
+	xi1 = _mm256_add_epi32(
+		_mm256_add_epi32(xi1, _mm256_srli_epi32(xi1, 16)),
+		_mm256_srli_epi32(xi1, 12));
+	xi2 = _mm256_add_epi32(
+		_mm256_add_epi32(xi2, _mm256_srli_epi32(xi2, 16)),
+		_mm256_srli_epi32(xi2, 12));
+	xi3 = _mm256_add_epi32(
+		_mm256_add_epi32(xi3, _mm256_srli_epi32(xi3, 16)),
+		_mm256_srli_epi32(xi3, 12));
+
+	/*
+	 * Clear unusued bits so that we have 32 bits per pair, then
+	 * combine pairs. An input pair is x0+17*x1; we need to compute
+	 * (x0+17*x1) + 289*(x2+17*x3). The multiplication result may
+	 * exceed 16 bits, so we would need to use 32-bit multiplies,
+	 * but they have high latencies; instead, we do two "manual"
+	 * multiplications by 17.
+	 */
+	xi0 = _mm256_and_si256(xi0, xm16);
+	xi1 = _mm256_and_si256(xi1, xm16);
+	xi2 = _mm256_and_si256(xi2, xm16);
+	xi3 = _mm256_and_si256(xi3, xm16);
+
+	xt0 = _mm256_add_epi32(xi0, _mm256_slli_epi32(xi0, 4));
+	xt1 = _mm256_add_epi32(xi1, _mm256_slli_epi32(xi1, 4));
+	xt2 = _mm256_add_epi32(xi2, _mm256_slli_epi32(xi2, 4));
+	xt3 = _mm256_add_epi32(xi3, _mm256_slli_epi32(xi3, 4));
+	xi0 = _mm256_add_epi32(
+		_mm256_add_epi32(xi0, _mm256_srli_epi64(xt0, 32)),
+		_mm256_srli_epi64(xt0, 28));
+	xi1 = _mm256_add_epi32(
+		_mm256_add_epi32(xi1, _mm256_srli_epi64(xt1, 32)),
+		_mm256_srli_epi64(xt1, 28));
+	xi2 = _mm256_add_epi32(
+		_mm256_add_epi32(xi2, _mm256_srli_epi64(xt2, 32)),
+		_mm256_srli_epi64(xt2, 28));
+	xi3 = _mm256_add_epi32(
+		_mm256_add_epi32(xi3, _mm256_srli_epi64(xt3, 32)),
+		_mm256_srli_epi64(xt3, 28));
+
+	/*
+	 * We have quartets of high parts, four per registers (two
+	 * per lane). To combine two quartets, we need to multiply
+	 * the high-quartet by 17**4 = 83521. This time, the
+	 * mul_epu32 intrinsic is convenient.
+	 */
+	xi0 = _mm256_add_epi64(
+		_mm256_and_si256(xi0, xmlo32),
+		_mm256_bsrli_epi128(_mm256_mul_epu32(xi0, x83521), 8));
+	xi1 = _mm256_add_epi64(
+		_mm256_and_si256(xi1, xmlo32),
+		_mm256_bsrli_epi128(_mm256_mul_epu32(xi1, x83521), 8));
+	xi2 = _mm256_add_epi64(
+		_mm256_and_si256(xi2, xmlo32),
+		_mm256_bsrli_epi128(_mm256_mul_epu32(xi2, x83521), 8));
+	xi3 = _mm256_add_epi64(
+		_mm256_and_si256(xi3, xmlo32),
+		_mm256_bsrli_epi128(_mm256_mul_epu32(xi3, x83521), 8));
+
+	/*
+	 * At that point, the xa* contain the low 32-bit halves of the
+	 * results, and the xi* contain the high 33-bit halves:
+	 *
+	 *   xa0: lo0 0 0 0 lo1 0 0 0
+	 *   xa1: lo2 0 0 0 lo3 0 0 0
+	 *   xa2: lo4 0 0 0 lo5 0 0 0
+	 *   xa3: lo6 0 0 0 lo7 0 0 0
+	 *
+	 *   xi0: hi0 t0 0 0 hi1 t1 0 0
+	 *   xi1: hi2 t2 0 0 hi3 t3 0 0
+	 *   xi2: hi4 t4 0 0 hi5 t5 0 0
+	 *   xi3: hi6 t6 0 0 hi7 t7 0 0
+	 *
+	 * We need to repack everything into:
+	 *
+	 *   lo0 hi0 lo1 hi1 lo2 hi2 lo3 hi3
+	 *   lo4 hi4 lo5 hi5 lo6 hi6 lo7 hi7
+	 *   and the t* bits into a byte.
+	 */
+
+	/* Pack lo* and hi* together (without the t* bits). */
+	xa0 = _mm256_or_si256(xa0, _mm256_slli_epi64(xi0, 32));
+	xa1 = _mm256_or_si256(xa1, _mm256_slli_epi64(xi1, 32));
+	xa2 = _mm256_or_si256(xa2, _mm256_slli_epi64(xi2, 32));
+	xa3 = _mm256_or_si256(xa3, _mm256_slli_epi64(xi3, 32));
+
+	/* Pack into two registers. */
+	xa0 = _mm256_or_si256(xa0, _mm256_bslli_epi128(xa1, 8));
+	xa2 = _mm256_or_si256(xa2, _mm256_bslli_epi128(xa3, 8));
+
+	/*
+	 *   xa0: lo0 hi0 lo2 hi2 lo1 hi1 lo3 hi3
+	 *   xa2: lo4 hi4 lo6 hi6 lo5 hi5 lo7 hi7
+	 */
+
+	/* Cross-lane permutations to get the right output order. */
+	xa0 = _mm256_permute4x64_epi64(xa0, 0xD8);
+	xa2 = _mm256_permute4x64_epi64(xa2, 0xD8);
+
+	/*
+	 * Write the 64 output bytes.
+	 */
+	_mm256_storeu_si256((void *)(buf +  0), xa0);
+	_mm256_storeu_si256((void *)(buf + 32), xa2);
+
+	/*
+	 * Compute the extra byte.
+	 */
+	xi0 = _mm256_srli_epi64(xi0, 32);
+	xi1 = _mm256_srli_epi64(xi1, 32);
+	xi2 = _mm256_srli_epi64(xi2, 32);
+	xi3 = _mm256_srli_epi64(xi3, 32);
+	xi0 = _mm256_or_si256(
+		_mm256_or_si256(
+			xi0,
+			_mm256_slli_epi32(xi1, 2)),
+		_mm256_or_si256(
+			_mm256_slli_epi32(xi2, 4),
+			_mm256_slli_epi32(xi3, 6)));
+	xi0 = _mm256_permute4x64_epi64(xi0, 0xD8);
+	xi0 = _mm256_or_si256(xi0, _mm256_bsrli_epi128(xi0, 1));
+	xi0 = _mm256_or_si256(xi0, _mm256_srli_epi64(xi0, 55));
+	return _mm256_cvtsi256_si32(xi0);
+}
+
+#endif
+
 /*
  * Decode a 65-bit word (lo is bits 0..31, hi is bits 32..63, tt is bit 64)
  * into eight values. Returned value is 1 on success, 0 on error.
@@ -710,6 +904,234 @@ decode8(uint16_t *x, uint32_t lo, uint32_t hi, uint32_t tt)
 	return a >> 31;
 }
 
+#if BAT_AVX2
+
+/*
+ * Eight decode8() in parallel. 65 bytes are read from buf[], and decoded,
+ * to yield 64 values in x[].
+ * Return value contains the eight success bits (each as a 32-bit word
+ * with value -1 = success, 0 = failure).
+ */
+TARGET_AVX2
+static inline __m256i
+decode8x8(uint16_t *x, const uint8_t *buf)
+{
+	/*
+	 * Useful facts:
+	 *    256 = 1 mod 17
+	 *    65536 = 1 mod 17
+	 *    2^32 = 1 mod 17
+	 *    for any x in 0..69631, (61681 * x) >> 20 = floor(x / 17)
+	 *    17 * 4042322161 = 1 mod 2^32
+	 */
+	__m256i xa, xb, xm4, xm8, xm16, x257, x61681, x4042322161;
+	__m256i xo[8];
+	__m256i xi0, xi1, xlo, xhi, xtt;
+	__m256i xr0, xr1, xr2, xr3, xs0, xs1, xs2, xs3;
+	int i;
+
+	xm4 = _mm256_set1_epi32(0x0F);
+	xm8 = _mm256_set1_epi32(0xFF);
+	xm16 = _mm256_set1_epi32(0xFFFF);
+	x257 = _mm256_set1_epi32(257);
+	x61681 = _mm256_set1_epi32(61681);
+	x4042322161 = _mm256_set1_epi32(-252645135);
+
+	/* Load low and high parts of each 64-bit word. */
+	xi0 = _mm256_loadu_si256((void *)(buf +  0));
+	xi1 = _mm256_loadu_si256((void *)(buf + 32));
+	xi0 = _mm256_shuffle_epi32(xi0, 0xD8);
+	xi1 = _mm256_shuffle_epi32(xi1, 0xD8);
+	xi0 = _mm256_permute4x64_epi64(xi0, 0xD8);
+	xi1 = _mm256_permute4x64_epi64(xi1, 0xD8);
+	xlo = _mm256_permute2x128_si256(xi0, xi1, 0x20);
+	xhi = _mm256_permute2x128_si256(xi0, xi1, 0x31);
+
+	/* Load the eight high bits. */
+	xtt = _mm256_and_si256(
+		_mm256_set1_epi32(1),
+		_mm256_srlv_epi32(
+			_mm256_set1_epi32(buf[64]),
+			_mm256_setr_epi32(0, 1, 2, 3, 4, 5, 6, 7)));
+
+	/*
+	 * First iteration: we need to compute the quotient and
+	 * remainder of (hi + (tt << 32)) divided by 17.
+	 *
+	 * We first compute the remainder.
+	 */
+	/* a <- (hi & 0xFFFF) + (hi >> 16) + tt */
+	xa = _mm256_add_epi32(
+		_mm256_and_si256(xhi, xm16),
+		_mm256_add_epi32(_mm256_srli_epi32(xhi, 16), xtt));
+	/* a <- (a & 0xFF) + (a >> 8) */
+	xa = _mm256_add_epi32(
+		_mm256_and_si256(xa, xm8),
+		_mm256_srli_epi32(xa, 8));
+	/* a <- a - 17*((61681 * a) >> 20) */
+	xb = _mm256_srli_epi32(_mm256_mulhi_epu16(xa, x61681), 4);
+	xa = _mm256_sub_epi32(xa,
+		_mm256_add_epi32(xb, _mm256_slli_epi32(xb, 4)));
+	/* x[0] <- (lo & 0x0F) + (a << 4) */
+	xo[0] = _mm256_add_epi32(
+		_mm256_and_si256(xlo, xm4),
+		_mm256_slli_epi32(xa, 4));
+
+	/*
+	 * Subtract the remainder, then do the exact division by multiplying
+	 * by the inverse of 17 modulo 2^32. We do all computations modulo
+	 * 2^32, since we know that the result will be lower than 2^32 (we
+	 * don't have to care about the value of tt here, it is implictly
+	 * taken into account in the remainder).
+	 */
+	/* hi <- (hi - a) * 4042322161 */
+	xhi = _mm256_mullo_epi32(_mm256_sub_epi32(xhi, xa), x4042322161);
+
+	/*
+	 * Next four iterations are similar, except that we work on a
+	 * 32-bit value now (no tt).
+	 */
+	for (i = 1; i <= 4; i ++) {
+		/* a <- (hi & 0xFFFF) + (hi >> 16) */
+		xa = _mm256_add_epi32(
+			_mm256_and_si256(xhi, xm16),
+			_mm256_srli_epi32(xhi, 16));
+		/* a <- (a & 0xFF) + (a >> 8) */
+		xa = _mm256_add_epi32(
+			_mm256_and_si256(xa, xm8),
+			_mm256_srli_epi32(xa, 8));
+		/* a <- a - 17*((61681 * a) >> 20) */
+		xb = _mm256_srli_epi32(_mm256_mulhi_epu16(xa, x61681), 4);
+		xa = _mm256_sub_epi32(xa,
+			_mm256_add_epi32(xb, _mm256_slli_epi32(xb, 4)));
+		/* lo <- lo >> 4 */
+		xlo = _mm256_srli_epi32(xlo, 4);
+		/* x[i] <- (lo & 0x0F) + (a << 4) */
+		xo[i] = _mm256_add_epi32(
+			_mm256_and_si256(xlo, xm4),
+			_mm256_slli_epi32(xa, 4));
+		/* hi <- (hi - a) * 4042322161 */
+		xhi = _mm256_mullo_epi32(
+			_mm256_sub_epi32(xhi, xa), x4042322161);
+	}
+
+	/*
+	 * At that point, max value for hi is 6049. The next two iterations
+	 * can be done with simpler computations.
+	 */
+	for (i = 5; i <= 6; i ++) {
+		/* a <- (61681 * hi) >> 20 */
+		xa = _mm256_srli_epi32(_mm256_mulhi_epu16(xhi, x61681), 4);
+		/* lo <- lo >> 4 */
+		xlo = _mm256_srli_epi32(xlo, 4);
+		/* x[i] <- (lo & 0x0F) + ((hi - 17 * a) << 4) */
+		xo[i] = _mm256_add_epi32(
+			_mm256_and_si256(xlo, xm4),
+			_mm256_slli_epi32(
+				_mm256_sub_epi32(xhi,
+					_mm256_add_epi32(
+						xa,
+						_mm256_slli_epi32(xa, 4))),
+				4));
+		/* hi <- a */
+		xhi = xa;
+	}
+
+	/*
+	 * We use the final value for 'hi' as-is; if it is off-range, this
+	 * will be detected in the final test.
+	 */
+	/* lo <- lo >> 4 */
+	xlo = _mm256_srli_epi32(xlo, 4);
+	/* x[7] <- lo + (hi << 4) */
+	xo[7] = _mm256_add_epi32(xlo, _mm256_slli_epi32(xhi, 4));
+
+	/*
+	 * Decoding is correct if all decoded values are less than 257.
+	 */
+	xa = _mm256_and_si256(
+		_mm256_and_si256(
+			_mm256_and_si256(
+				_mm256_cmpgt_epi32(x257, xo[0]),
+				_mm256_cmpgt_epi32(x257, xo[1])),
+			_mm256_and_si256(
+				_mm256_cmpgt_epi32(x257, xo[2]),
+				_mm256_cmpgt_epi32(x257, xo[3]))),
+		_mm256_and_si256(
+			_mm256_and_si256(
+				_mm256_cmpgt_epi32(x257, xo[4]),
+				_mm256_cmpgt_epi32(x257, xo[5])),
+			_mm256_and_si256(
+				_mm256_cmpgt_epi32(x257, xo[6]),
+				_mm256_cmpgt_epi32(x257, xo[7]))));
+
+	/*
+	 * Encode values. Registers currently contain (order low -> high
+	 * in each register, 16-bit elements):
+	 *   xo[0]   x00 0 x08 0 x16 0 x24 0 x32 0 x40 0 x48 0 x56 0
+	 *   xo[1]   x01 0 x09 0 x17 0 x25 0 x33 0 x41 0 x49 0 x57 0
+	 *   xo[2]   x02 0 x10 0 x18 0 x26 0 x34 0 x42 0 x50 0 x58 0
+	 *   xo[3]   x03 0 x11 0 x19 0 x27 0 x35 0 x43 0 x51 0 x59 0
+	 *   xo[4]   x04 0 x12 0 x20 0 x28 0 x36 0 x44 0 x52 0 x60 0
+	 *   xo[5]   x05 0 x13 0 x21 0 x29 0 x37 0 x45 0 x53 0 x61 0
+	 *   xo[6]   x06 0 x14 0 x22 0 x30 0 x38 0 x46 0 x54 0 x62 0
+	 *   xo[7]   x07 0 x15 0 x23 0 x31 0 x39 0 x47 0 x55 0 x63 0
+	 * All the return values fit on 16 bits; we ignore the high half
+	 * of each 32-bit element.
+	 *
+	 * We first pack values into four registers.
+	 */
+	xr0 = _mm256_or_si256(xo[0], _mm256_slli_epi32(xo[1], 16));
+	xr1 = _mm256_or_si256(xo[2], _mm256_slli_epi32(xo[3], 16));
+	xr2 = _mm256_or_si256(xo[4], _mm256_slli_epi32(xo[5], 16));
+	xr3 = _mm256_or_si256(xo[6], _mm256_slli_epi32(xo[7], 16));
+
+	/*
+	 * xr0: x00 x01 x08 x09 x16 x17 x24 x25 x32 x33 x40 x41 x48 x49 x56 x57
+	 * xr1: x02 x03 x10 x11 x18 x19 x26 x27 x34 x35 x42 x43 x50 x51 x58 x59
+	 * xr2: x04 x05 x12 x13 x20 x21 x28 x29 x36 x37 x44 x45 x52 x53 x60 x61
+	 * xr3: x06 x07 x14 x15 x22 x23 x30 x31 x38 x39 x46 x47 x54 x55 x62 x63
+	 */
+
+	xs0 = _mm256_unpacklo_epi32(xr0, xr1);
+	xs1 = _mm256_unpackhi_epi32(xr0, xr1);
+	xs2 = _mm256_unpacklo_epi32(xr2, xr3);
+	xs3 = _mm256_unpackhi_epi32(xr2, xr3);
+
+	/*
+	 * xs0: x00 x01 x02 x03 x08 x09 x10 x11 x32 x33 x34 x35 x40 x41 x42 x43
+	 * xs1: x16 x17 x18 x19 x24 x25 x26 x27 x48 x19 x50 x51 x56 x57 x58 x59
+	 * xs2: x04 x05 x06 x07 x12 x13 x14 x15 x36 x37 x38 x39 x44 x45 x46 x47
+	 * xs3: x20 x21 x22 x23 x28 x29 x30 x31 x52 x53 x54 x55 x60 x61 x62 x63
+	 */
+
+	xr0 = _mm256_unpacklo_epi64(xs0, xs2);
+	xr1 = _mm256_unpackhi_epi64(xs0, xs2);
+	xr2 = _mm256_unpacklo_epi64(xs1, xs3);
+	xr3 = _mm256_unpackhi_epi64(xs1, xs3);
+
+	/*
+	 * xr0: x00 x01 x02 x03 x04 x05 x06 x07 x32 x33 x34 x35 x36 x37 x38 x39
+	 * xr1: x08 x09 x10 x11 x12 x13 x14 x15 x40 x41 x42 x43 x44 x45 x46 x47
+	 * xr2: x16 x17 x18 x19 x20 x21 x22 x23 x48 x49 x50 x51 x52 x53 x54 x55
+	 * xr3: x24 x25 x26 x27 x28 x29 x30 x31 x56 x57 x58 x59 x60 x61 x62 x63
+	 */
+
+	xs0 = _mm256_permute2x128_si256(xr0, xr1, 0x20);
+	xs1 = _mm256_permute2x128_si256(xr2, xr3, 0x20);
+	xs2 = _mm256_permute2x128_si256(xr0, xr1, 0x31);
+	xs3 = _mm256_permute2x128_si256(xr2, xr3, 0x31);
+
+	_mm256_storeu_si256((void *)(x +  0), xs0);
+	_mm256_storeu_si256((void *)(x + 16), xs1);
+	_mm256_storeu_si256((void *)(x + 32), xs2);
+	_mm256_storeu_si256((void *)(x + 48), xs3);
+
+	return xa;
+}
+
+#endif
+
 /* see inner.h */
 size_t
 bat_encode_257(void *out, size_t max_out_len,
@@ -752,7 +1174,9 @@ bat_encode_257(void *out, size_t max_out_len,
 		buf[3] = (uint8_t)((x[2] >> 4) | ((unsigned)x[3] << 6));
 		buf[4] = (uint8_t)(x[3] >> 2);
 		return 5;
-	default:
+	case 3:
+	case 4:
+	case 5:
 		n = (size_t)1 << logn;
 		v = 0;
 		xb = 0;
@@ -774,6 +1198,29 @@ bat_encode_257(void *out, size_t max_out_len,
 			buf[v ++] = xb;
 		}
 		return v;
+	default:
+		n = (size_t)1 << logn;
+		v = 0;
+#if BAT_AVX2
+		for (u = 0; u < n; u += 64) {
+			buf[v + 64] = encode8x8(buf + v, x + u);
+			v += 65;
+		}
+#else
+		for (u = 0; u < n; u += 64) {
+			xb = 0;
+			for (j = 0; j < 8; j ++) {
+				uint32_t lo, hi;
+
+				xb |= encode8(&lo, &hi, x + u + (j << 3)) << j;
+				enc32le(buf + v + (j << 3), lo);
+				enc32le(buf + v + (j << 3) + 4, hi);
+			}
+			buf[v + 64] = xb;
+			v += 65;
+		}
+#endif
+		return v;
 	}
 }
 
@@ -785,6 +1232,9 @@ bat_decode_257(uint16_t *x, unsigned logn,
 	const uint8_t *buf;
 	uint32_t r, xb;
 	size_t in_len, u, n;
+#if BAT_AVX2
+	__m256i xr;
+#endif
 
 	buf = in;
 	switch (logn) {
@@ -839,6 +1289,20 @@ bat_decode_257(uint16_t *x, unsigned logn,
 		if (max_in_len < in_len) {
 			return 0;
 		}
+#if BAT_AVX2
+		xr = _mm256_set1_epi32(-1);
+		for (u = 0; u < n; u += 64) {
+			xr = _mm256_and_si256(xr, decode8x8(x + u, buf));
+			buf += 65;
+		}
+
+		xr = _mm256_and_si256(xr, _mm256_bsrli_epi128(xr, 4));
+		xr = _mm256_and_si256(xr, _mm256_bsrli_epi128(xr, 8));
+		r = _mm_cvtsi128_si32(
+			_mm_and_si128(
+				_mm256_castsi256_si128(xr),
+				_mm256_extracti128_si256(xr, 1))) & 1;
+#else
 		r = 1;
 		for (u = 0; u < n; u += 64) {
 			size_t v;
@@ -852,6 +1316,7 @@ bat_decode_257(uint16_t *x, unsigned logn,
 			}
 			buf += 65;
 		}
+#endif
 		break;
 	}
 
@@ -912,6 +1377,219 @@ encode_ct_8(uint32_t *lo, uint32_t *hi, const int8_t *x)
 	*hi = wh;
 	return r;
 }
+
+#if BAT_AVX2
+
+/*
+ * Eight encode_ct_8() in parallel. 64 input values (x[0..63]) are encoded
+ * into 56 consecutive bytes (buf[0..55]) and the eight extra bits are
+ * returned as a packed byte value.
+ */
+TARGET_AVX2
+static inline uint32_t
+encode_ct_8x8(uint8_t *buf, const int8_t *x)
+{
+	__m256i xm3, xm8, xm16, xm32, x64, x83521;
+	__m256i xi0, xi1, xa0, xa1, xt0, xt1;
+
+	xm3 = _mm256_set1_epi8(0x07);
+	xm8 = _mm256_set1_epi16(0x00FF);
+	xm16 = _mm256_set1_epi32(0xFFFF);
+	xm32 = _mm256_set1_epi64x(0xFFFFFFFF);
+	x64 = _mm256_set1_epi8(64);
+	x83521 = _mm256_set1_epi64x(83521);
+
+	/*
+	 * Load the 64 values to encode and normalize into 0..128.
+	 */
+	xi0 = _mm256_loadu_si256((const void *)(x +  0));
+	xi1 = _mm256_loadu_si256((const void *)(x + 32));
+	xi0 = _mm256_add_epi8(xi0, x64);
+	xi1 = _mm256_add_epi8(xi1, x64);
+
+	/*
+	 * Low parts: we extract the low 3 bits of each value, and
+	 * repack them.
+	 */
+	xa0 = _mm256_and_si256(xi0, xm3);
+	xa1 = _mm256_and_si256(xi1, xm3);
+
+	xa0 = _mm256_or_si256(
+		_mm256_and_si256(xa0, xm8),
+		_mm256_srli_epi16(xa0, 5));
+	xa1 = _mm256_or_si256(
+		_mm256_and_si256(xa1, xm8),
+		_mm256_srli_epi16(xa1, 5));
+
+	xa0 = _mm256_or_si256(
+		_mm256_and_si256(xa0, xm16),
+		_mm256_srli_epi32(xa0, 10));
+	xa1 = _mm256_or_si256(
+		_mm256_and_si256(xa1, xm16),
+		_mm256_srli_epi32(xa1, 10));
+
+	xa0 = _mm256_or_si256(
+		_mm256_and_si256(xa0, xm32),
+		_mm256_srli_epi64(xa0, 20));
+	xa1 = _mm256_or_si256(
+		_mm256_and_si256(xa1, xm32),
+		_mm256_srli_epi64(xa1, 20));
+
+	/*
+	 * Low parts are now in xa0 and xa1 (24-bit values, each in a
+	 * 32-bit element):
+	 *
+	 *   xa0:  lo0 0 lo1 0 lo2 0 lo3 0
+	 *   xa1:  lo4 0 lo5 0 lo6 0 lo7 0
+	 */
+
+	/*
+	 * Extract high parts from each input value.
+	 */
+	xi0 = _mm256_srli_epi16(_mm256_andnot_si256(xm3, xi0), 3);
+	xi1 = _mm256_srli_epi16(_mm256_andnot_si256(xm3, xi1), 3);
+
+	/*
+	 * Combine high parts by pairs (one 16-bit element per pair).
+	 */
+	xi0 = _mm256_add_epi16(
+		_mm256_srli_epi16(_mm256_andnot_si256(xm8, xi0), 4),
+		_mm256_add_epi16(
+			_mm256_and_si256(xi0, xm8),
+			_mm256_srli_epi16(xi0, 8)));
+	xi1 = _mm256_add_epi16(
+		_mm256_srli_epi16(_mm256_andnot_si256(xm8, xi1), 4),
+		_mm256_add_epi16(
+			_mm256_and_si256(xi1, xm8),
+			_mm256_srli_epi16(xi1, 8)));
+
+	/*
+	 * Combine pairs into quartets (one 32-bit element per quartet).
+	 * The high pair is of each quartet is multiplied by 289, then
+	 * added to the low pair. Since multiplications have relatively
+	 * high latency, we use two "manual" multiplications by 17 instead.
+	 */
+	xt0 = _mm256_srli_epi32(xi0, 16);
+	xt1 = _mm256_srli_epi32(xi1, 16);
+	xt0 = _mm256_add_epi32(xt0, _mm256_slli_epi32(xt0, 4));
+	xt1 = _mm256_add_epi32(xt1, _mm256_slli_epi32(xt1, 4));
+	xt0 = _mm256_add_epi32(xt0, _mm256_slli_epi32(xt0, 4));
+	xt1 = _mm256_add_epi32(xt1, _mm256_slli_epi32(xt1, 4));
+	xi0 = _mm256_add_epi32(_mm256_and_si256(xi0, xm16), xt0);
+	xi1 = _mm256_add_epi32(_mm256_and_si256(xi1, xm16), xt1);
+
+	/*
+	 * Combine quartets together. This time, mul_epu32() is more
+	 * efficient than four manual multiplications by 17. We get
+	 * each result (high parts, 33 bits) into a 64-bit element.
+	 */
+	xi0 = _mm256_add_epi64(
+		_mm256_and_si256(xi0, xm32),
+		_mm256_mul_epu32(_mm256_srli_epi64(xi0, 32), x83521));
+	xi1 = _mm256_add_epi64(
+		_mm256_and_si256(xi1, xm32),
+		_mm256_mul_epu32(_mm256_srli_epi64(xi1, 32), x83521));
+
+	/*
+	 * High parts (hi*, 32-bit) and extra bits (t*, 1-bit) are now in
+	 * xi0 and xi1:
+	 *
+	 *   xi0: hi0 t0 hi1 t1 hi2 t2 hi3 t3
+	 *   xi1: hi4 t4 hi5 t5 hi6 t6 hi7 t7
+	 */
+
+	/*
+	 * Combine the low (24-bit) and high (32-bit) parts (without the
+	 * t* bits) into 56 bytes. We first make the eight 7-byte chunks
+	 * in 64-bit elements.
+	 */
+	xa0 = _mm256_or_si256(xa0, _mm256_slli_epi64(xi0, 24));
+	xa1 = _mm256_or_si256(xa1, _mm256_slli_epi64(xi1, 24));
+
+	/*
+	 * We now need to make four output values, of 4, 4, 16 and 32
+	 * bytes, respectively, so that we may do non-overlapping writes
+	 * (to avoid aliasing issues) and avoid writing beyond the
+	 * output buffer. The first eight bytes need to be written as
+	 * two chunks of 4 bytes because we might be compiling in 32-bit
+	 * mode, in which case intrinsics to extract the low 64 bits as
+	 * an integer may not be available.
+	 *
+	 */
+
+	/* Output 0..3 */
+	enc32le(buf, (uint32_t)_mm256_cvtsi256_si32(xa0));
+
+	/* Output 4..7 */
+	enc32le(buf + 4, (uint32_t)_mm_cvtsi128_si32(
+		_mm_shuffle_epi8(_mm256_castsi256_si128(xa0),
+			_mm_setr_epi8(4, 5, 6, 8, -1, -1, -1, -1,
+				-1, -1, -1, -1, -1, -1, -1, -1))));
+
+	/* Output 8..23 */
+	xt0 = _mm256_bsrli_epi128(xa0, 9);
+	xt1 = _mm256_shuffle_epi8(xa0,
+		_mm256_setr_epi8(
+			-1, -1, -1, -1, -1, -1, -1, -1,
+			-1, -1, -1, -1, -1, -1, -1, -1,
+			-1, -1, -1, -1, -1, -1,
+			0, 1, 2, 3, 4, 5, 6, 8, 9, 10));
+	_mm_storeu_si128((void *)(buf + 8),
+		_mm_blend_epi16(
+			_mm256_castsi256_si128(xt0),
+			_mm256_extracti128_si256(xt1, 1),
+			0xF8));
+
+	/* Output 24..55 */
+	/* We want 4 bytes from the high lane of xa0 (into the low
+	   lane of the result), 14 bytes from the low lane of xa1
+	   (12 into the low lane of the result, 2 into the high lane)
+	   and 14 bytes from the high lane of xa1 (all into the high
+	   lane of the result). We only need one cross-lane move, which
+	   we do first (into xt0). */
+	xt0 = _mm256_permute2x128_si256(xa0, xa1, 0x21);
+	xt1 = _mm256_or_si256(
+		_mm256_or_si256(
+			_mm256_shuffle_epi8(xt0, _mm256_setr_epi8(
+				11, 12, 13, 14, -1, -1, -1, -1,
+				-1, -1, -1, -1, -1, -1, -1, -1,
+				-1, -1, -1, -1, -1, -1, -1, -1,
+				-1, -1, -1, -1, -1, -1, -1, -1)),
+			_mm256_shuffle_epi8(xa1, _mm256_setr_epi8(
+				-1, -1, -1, -1,
+				0, 1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12,
+				-1, -1, -1, -1, -1, -1, -1, -1,
+				-1, -1, -1, -1, -1, -1, -1, -1))),
+		_mm256_or_si256(
+			_mm256_shuffle_epi8(xt0, _mm256_setr_epi8(
+				-1, -1, -1, -1, -1, -1, -1, -1,
+				-1, -1, -1, -1, -1, -1, -1, -1,
+				13, 14, -1, -1, -1, -1, -1, -1,
+				-1, -1, -1, -1, -1, -1, -1, -1)),
+			_mm256_shuffle_epi8(xa1, _mm256_setr_epi8(
+				-1, -1, -1, -1, -1, -1, -1, -1,
+				-1, -1, -1, -1, -1, -1, -1, -1,
+				-1, -1, 0, 1, 2, 3, 4, 5,
+				6, 8, 9, 10, 11, 12, 13, 14))));
+	_mm256_storeu_si256((void *)(buf + 24), xt1);
+
+	/*
+	 * Extract the extra bits to make the extra byte.
+	 */
+	xi0 = _mm256_or_si256(
+		_mm256_srli_epi64(xi0, 32),
+		_mm256_slli_epi64(_mm256_bsrli_epi128(xi0, 12), 1));
+	xi1 = _mm256_or_si256(
+		_mm256_srli_epi64(xi1, 32),
+		_mm256_slli_epi64(_mm256_bsrli_epi128(xi1, 12), 1));
+	xi0 = _mm256_or_si256(xi0, _mm256_slli_epi64(xi1, 4));
+	xi0 = _mm256_permute4x64_epi64(xi0, 0xD8);
+	xi0 = _mm256_or_si256(xi0, _mm256_bsrli_epi128(xi0, 1));
+	xi0 = _mm256_or_si256(xi0, _mm256_srli_epi64(xi0, 54));
+	return _mm256_cvtsi256_si32(xi0);
+}
+
+#endif
 
 /*
  * Decode a 57-bit word (lo is bits 0..23, hi is bits 24..55, tt is bit 56)
@@ -992,6 +1670,272 @@ decode_ct_8(int8_t *x, uint32_t lo, uint32_t hi, uint32_t tt)
 	return a >> 31;
 }
 
+#if BAT_AVX2
+
+/*
+ * Eight decode_ct_8() in parallel. 57 bytes are read from buf[] and
+ * decoded into 64 values into x[].
+ * Return value contains the eight success bits as 32-bit elements
+ * (with value -1 = success, 0 = failure).
+ */
+TARGET_AVX2
+static inline __m256i
+decode_ct_8x8(int8_t *x, const uint8_t *buf)
+{
+	/*
+	 * Useful facts:
+	 *    256 = 1 mod 17
+	 *    65536 = 1 mod 17
+	 *    2^32 = 1 mod 17
+	 *    for any x in 0..69631, (61681 * x) >> 20 = floor(x / 17)
+	 *    17 * 4042322161 = 1 mod 2^32
+	 */
+	__m256i xa, xb, xm3, xm8, xm16, x64, x129, x61681, x4042322161;
+	__m256i xo[8];
+	__m256i xi0, xi1, xlo, xhi, xtt;
+	__m256i xr0, xr1, xs0, xs1;
+	int i;
+
+	xm3 = _mm256_set1_epi32(0x07);
+	xm8 = _mm256_set1_epi32(0xFF);
+	xm16 = _mm256_set1_epi32(0xFFFF);
+	x64 = _mm256_set1_epi8(64);
+	x129 = _mm256_set1_epi32(129);
+	x61681 = _mm256_set1_epi32(61681);
+	x4042322161 = _mm256_set1_epi32(-252645135);
+
+	/* Load the 56 bytes. */
+	xi0 = _mm256_loadu_si256((void *)(buf + 0));
+	xi1 = _mm256_loadu_si256((void *)(buf + 24));
+
+	/* Move bytes around so that we get the low parts (24 bits each)
+	   into xlo (in 32-bit elements) and the high parts (32 bits each)
+	   into xhi. */
+
+	/* xi0 <- bytes 0..15 | 16..31
+	   xi1 <- bytes 24..39 | 40..55
+	   xa  <- bytes 16..31 | 24..39 */
+	xa = _mm256_permute2x128_si256(xi0, xi1, 0x21);
+
+	/* xlo <- bytes:
+	    0 1 2 . 7 8 9 . 14 15 16 . 21 22 23 .
+	    28 29 30 . 35 36 37 . 42 43 44 . 49 50 51 . */
+	xlo = _mm256_or_si256(
+		_mm256_or_si256(
+			_mm256_shuffle_epi8(xi0, _mm256_setr_epi8(
+				0, 1, 2, -1, 7, 8, 9, -1,
+				14, 15, -1, -1, -1, -1, -1, -1,
+				12, 13, 14, -1, -1, -1, -1, -1,
+				-1, -1, -1, -1, -1, -1, -1, -1)),
+			_mm256_shuffle_epi8(xi1, _mm256_setr_epi8(
+				-1, -1, -1, -1, -1, -1, -1, -1,
+				-1, -1, -1, -1, -1, -1, -1, -1,
+				-1, -1, -1, -1, -1, -1, -1, -1,
+				2, 3, 4, -1, 9, 10, 11, -1))),
+		_mm256_shuffle_epi8(xa, _mm256_setr_epi8(
+			-1, -1, -1, -1, -1, -1, -1, -1,
+			-1, -1, 0, -1, 5, 6, 7, -1,
+			-1, -1, -1, -1, 11, 12, 13, -1,
+			-1, -1, -1, -1, -1, -1, -1, -1)));
+
+	/* xhi <- bytes:
+	    3 4 5 6 10 11 12 13 17 18 19 20 24 25 26 27
+	    31 32 33 34 38 39 40 41 45 46 47 48 52 53 54 55 */
+	xhi = _mm256_or_si256(
+		_mm256_or_si256(
+			_mm256_shuffle_epi8(xi0, _mm256_setr_epi8(
+				3, 4, 5, 6, 10, 11, 12, 13,
+				-1, -1, -1, -1, -1, -1, -1, -1,
+				15, -1, -1, -1, -1, -1, -1, -1,
+				-1, -1, -1, -1, -1, -1, -1, -1)),
+			_mm256_shuffle_epi8(xi1, _mm256_setr_epi8(
+				-1, -1, -1, -1, -1, -1, -1, -1,
+				-1, -1, -1, -1, 0, 1, 2, 3,
+				-1, -1, -1, -1, -1, -1, 0, 1,
+				5, 6, 7, 8, 12, 13, 14, 15))),
+		_mm256_shuffle_epi8(xa, _mm256_setr_epi8(
+			-1, -1, -1, -1, -1, -1, -1, -1,
+			1, 2, 3, 4, -1, -1, -1, -1,
+			-1, 8, 9, 10, 14, 15, -1, -1,
+			-1, -1, -1, -1, -1, -1, -1, -1)));
+
+	/* Extract the high bits into xtt. */
+	xtt = _mm256_and_si256(
+		_mm256_set1_epi32(1),
+		_mm256_srlv_epi32(
+			_mm256_set1_epi32(buf[56]),
+			_mm256_setr_epi32(0, 1, 2, 3, 4, 5, 6, 7)));
+
+	/*
+	 * First iteration: we need to compute the quotient and
+	 * remainder of (hi + (tt << 32)) divided by 17.
+	 *
+	 * We first compute the remainder.
+	 */
+	/* a <- (hi & 0xFFFF) + (hi >> 16) + tt */
+	xa = _mm256_add_epi32(
+		_mm256_and_si256(xhi, xm16),
+		_mm256_add_epi32(_mm256_srli_epi32(xhi, 16), xtt));
+	/* a <- (a & 0xFF) + (a >> 8) */
+	xa = _mm256_add_epi32(
+		_mm256_and_si256(xa, xm8),
+		_mm256_srli_epi32(xa, 8));
+	/* a <- a - 17*((61681 * a) >> 20) */
+	xb = _mm256_srli_epi32(_mm256_mulhi_epu16(xa, x61681), 4);
+	xa = _mm256_sub_epi32(xa,
+		_mm256_add_epi32(xb, _mm256_slli_epi32(xb, 4)));
+	/* x[0] <- (lo & 0x07) + (a << 3) */
+	xo[0] = _mm256_add_epi32(
+		_mm256_and_si256(xlo, xm3),
+		_mm256_slli_epi32(xa, 3));
+
+	/*
+	 * Subtract the remainder, then do the exact division by multiplying
+	 * by the inverse of 17 modulo 2^32. We do all computations modulo
+	 * 2^32, since we know that the result will be lower than 2^32 (we
+	 * don't have to care about the value of tt here, it is implictly
+	 * taken into account in the remainder).
+	 */
+	/* hi <- (hi - a) * 4042322161 */
+	xhi = _mm256_mullo_epi32(_mm256_sub_epi32(xhi, xa), x4042322161);
+
+	/*
+	 * Next four iterations are similar, except that we work on a
+	 * 32-bit value now (no tt).
+	 */
+	for (i = 1; i <= 4; i ++) {
+		/* a <- (hi & 0xFFFF) + (hi >> 16) */
+		xa = _mm256_add_epi32(
+			_mm256_and_si256(xhi, xm16),
+			_mm256_srli_epi32(xhi, 16));
+		/* a <- (a & 0xFF) + (a >> 8) */
+		xa = _mm256_add_epi32(
+			_mm256_and_si256(xa, xm8),
+			_mm256_srli_epi32(xa, 8));
+		/* a <- a - 17*((61681 * a) >> 20) */
+		xb = _mm256_srli_epi32(_mm256_mulhi_epu16(xa, x61681), 4);
+		xa = _mm256_sub_epi32(xa,
+			_mm256_add_epi32(xb, _mm256_slli_epi32(xb, 4)));
+		/* lo <- lo >> 3 */
+		xlo = _mm256_srli_epi32(xlo, 3);
+		/* x[i] <- (lo & 0x07) + (a << 3) */
+		xo[i] = _mm256_add_epi32(
+			_mm256_and_si256(xlo, xm3),
+			_mm256_slli_epi32(xa, 3));
+		/* hi <- (hi - a) * 4042322161 */
+		xhi = _mm256_mullo_epi32(
+			_mm256_sub_epi32(xhi, xa), x4042322161);
+	}
+
+	/*
+	 * At that point, max value for hi is 6049. The next two iterations
+	 * can be done with simpler computations.
+	 */
+	for (i = 5; i <= 6; i ++) {
+		/* a <- (61681 * hi) >> 20 */
+		xa = _mm256_srli_epi32(_mm256_mulhi_epu16(xhi, x61681), 4);
+		/* lo <- lo >> 3 */
+		xlo = _mm256_srli_epi32(xlo, 3);
+		/* x[i] <- (lo & 0x07) + ((hi - 17 * a) << 3) */
+		xo[i] = _mm256_add_epi32(
+			_mm256_and_si256(xlo, xm3),
+			_mm256_slli_epi32(
+				_mm256_sub_epi32(xhi,
+					_mm256_add_epi32(
+						xa,
+						_mm256_slli_epi32(xa, 4))),
+				3));
+		/* hi <- a */
+		xhi = xa;
+	}
+
+	/*
+	 * We use the final value for 'hi' as-is; if it is off-range, this
+	 * will be detected in the final test.
+	 */
+	/* lo <- lo >> 3 */
+	xlo = _mm256_srli_epi32(xlo, 3);
+	/* x[7] <- lo + (hi << 3) */
+	xo[7] = _mm256_add_epi32(xlo, _mm256_slli_epi32(xhi, 3));
+
+	/*
+	 * Decoding is correct if all decoded values are less than 129.
+	 */
+	xa = _mm256_and_si256(
+		_mm256_and_si256(
+			_mm256_and_si256(
+				_mm256_cmpgt_epi32(x129, xo[0]),
+				_mm256_cmpgt_epi32(x129, xo[1])),
+			_mm256_and_si256(
+				_mm256_cmpgt_epi32(x129, xo[2]),
+				_mm256_cmpgt_epi32(x129, xo[3]))),
+		_mm256_and_si256(
+			_mm256_and_si256(
+				_mm256_cmpgt_epi32(x129, xo[4]),
+				_mm256_cmpgt_epi32(x129, xo[5])),
+			_mm256_and_si256(
+				_mm256_cmpgt_epi32(x129, xo[6]),
+				_mm256_cmpgt_epi32(x129, xo[7]))));
+
+	/*
+	 * Encode values. Registers currently contain (order low -> high
+	 * in each register, 16-bit elements):
+	 *   xo[0]   x00 0 x08 0 x16 0 x24 0 x32 0 x40 0 x48 0 x56 0
+	 *   xo[1]   x01 0 x09 0 x17 0 x25 0 x33 0 x41 0 x49 0 x57 0
+	 *   xo[2]   x02 0 x10 0 x18 0 x26 0 x34 0 x42 0 x50 0 x58 0
+	 *   xo[3]   x03 0 x11 0 x19 0 x27 0 x35 0 x43 0 x51 0 x59 0
+	 *   xo[4]   x04 0 x12 0 x20 0 x28 0 x36 0 x44 0 x52 0 x60 0
+	 *   xo[5]   x05 0 x13 0 x21 0 x29 0 x37 0 x45 0 x53 0 x61 0
+	 *   xo[6]   x06 0 x14 0 x22 0 x30 0 x38 0 x46 0 x54 0 x62 0
+	 *   xo[7]   x07 0 x15 0 x23 0 x31 0 x39 0 x47 0 x55 0 x63 0
+	 * All the return values fit on 8 bits; thus, we first pack
+	 * values into two registers.
+	 */
+	xr0 = _mm256_or_si256(
+		_mm256_or_si256(
+			xo[0],
+			_mm256_slli_epi32(xo[1], 8)),
+		_mm256_or_si256(
+			_mm256_slli_epi32(xo[2], 16),
+			_mm256_slli_epi32(xo[3], 24)));
+	xr1 = _mm256_or_si256(
+		_mm256_or_si256(
+			xo[4],
+			_mm256_slli_epi32(xo[5], 8)),
+		_mm256_or_si256(
+			_mm256_slli_epi32(xo[6], 16),
+			_mm256_slli_epi32(xo[7], 24)));
+
+	/*
+	 * xr0: 0-3  8-11 16-19 24-27 | 32-35 40-43 48-51 56-59
+	 * xr1: 4-7 12-15 20-23 38-31 | 36-39 44-47 52-55 60-63
+	 */
+
+	xs0 = _mm256_unpacklo_epi32(xr0, xr1);
+	xs1 = _mm256_unpackhi_epi32(xr0, xr1);
+
+	/*
+	 * xs0:  0-15 | 32-47
+	 * xs1: 16-31 | 48-63
+	 */
+
+	xr0 = _mm256_permute2x128_si256(xs0, xs1, 0x20);
+	xr1 = _mm256_permute2x128_si256(xs0, xs1, 0x31);
+
+	/*
+	 * We got values in the 0..128 range, we must normalize to -64..+64.
+	 */
+	xr0 = _mm256_sub_epi8(xr0, x64);
+	xr1 = _mm256_sub_epi8(xr1, x64);
+
+	_mm256_storeu_si256((void *)(x +  0), xr0);
+	_mm256_storeu_si256((void *)(x + 32), xr1);
+
+	return xa;
+}
+
+#endif
+
 /* see inner.h */
 size_t
 bat_encode_ciphertext_257(void *out, size_t max_out_len,
@@ -1033,7 +1977,9 @@ bat_encode_ciphertext_257(void *out, size_t max_out_len,
 		buf[2] = (uint8_t)(c[2] + 64);
 		buf[3] = (uint8_t)(c[3] + 64);
 		return 4;
-	default:
+	case 3:
+	case 4:
+	case 5:
 		n = (size_t)1 << logn;
 		v = 0;
 		xb = 0;
@@ -1055,6 +2001,30 @@ bat_encode_ciphertext_257(void *out, size_t max_out_len,
 			buf[v ++] = xb;
 		}
 		return v;
+	default:
+		n = (size_t)1 << logn;
+		v = 0;
+#if BAT_AVX2
+		for (u = 0; u < n; u += 64) {
+			buf[v + 56] = encode_ct_8x8(buf + v, c + u);
+			v += 57;
+		}
+#else
+		for (u = 0; u < n; u += 64) {
+			xb = 0;
+			for (j = 0; j < 8; j ++) {
+				uint32_t lo, hi;
+
+				xb |= encode_ct_8(&lo, &hi,
+					c + u + (j << 3)) << j;
+				enc24le(buf + v, lo);
+				enc32le(buf + v + 3, hi);
+				v += 7;
+			}
+			buf[v ++] = xb;
+		}
+#endif
+		return v;
 	}
 }
 
@@ -1066,6 +2036,9 @@ bat_decode_ciphertext_257(int8_t *c, unsigned logn,
 	const uint8_t *buf;
 	uint32_t r, xb;
 	size_t in_len, u, n;
+#if BAT_AVX2
+	__m256i xr;
+#endif
 
 	buf = in;
 	switch (logn) {
@@ -1115,6 +2088,19 @@ bat_decode_ciphertext_257(int8_t *c, unsigned logn,
 		if (max_in_len < in_len) {
 			return 0;
 		}
+#if BAT_AVX2
+		xr = _mm256_set1_epi32(-1);
+		for (u = 0; u < n; u += 64) {
+			xr = _mm256_and_si256(xr, decode_ct_8x8(c + u, buf));
+			buf += 57;
+		}
+		xr = _mm256_and_si256(xr, _mm256_bsrli_epi128(xr, 4));
+		xr = _mm256_and_si256(xr, _mm256_bsrli_epi128(xr, 8));
+		r = _mm_cvtsi128_si32(
+			_mm_and_si128(
+				_mm256_castsi256_si128(xr),
+				_mm256_extracti128_si256(xr, 1))) & 1;
+#else
 		r = 1;
 		for (u = 0; u < n; u += 64) {
 			size_t v;
@@ -1131,6 +2117,7 @@ bat_decode_ciphertext_257(int8_t *c, unsigned logn,
 			}
 			buf += 57;
 		}
+#endif
 		break;
 	}
 
