@@ -823,7 +823,7 @@ encode8x8(uint8_t *buf, const uint16_t *x)
 	xi0 = _mm256_permute4x64_epi64(xi0, 0xD8);
 	xi0 = _mm256_or_si256(xi0, _mm256_bsrli_epi128(xi0, 1));
 	xi0 = _mm256_or_si256(xi0, _mm256_srli_epi64(xi0, 55));
-	return _mm256_cvtsi256_si32(xi0);
+	return _mm_cvtsi128_si32(_mm256_castsi256_si128(xi0));
 }
 
 #endif
@@ -1518,7 +1518,7 @@ encode_ct_8x8(uint8_t *buf, const int8_t *x)
 	 */
 
 	/* Output 0..3 */
-	enc32le(buf, (uint32_t)_mm256_cvtsi256_si32(xa0));
+	enc32le(buf, (uint32_t)_mm_cvtsi128_si32(_mm256_castsi256_si128(xa0)));
 
 	/* Output 4..7 */
 	enc32le(buf + 4, (uint32_t)_mm_cvtsi128_si32(
@@ -1586,7 +1586,7 @@ encode_ct_8x8(uint8_t *buf, const int8_t *x)
 	xi0 = _mm256_permute4x64_epi64(xi0, 0xD8);
 	xi0 = _mm256_or_si256(xi0, _mm256_bsrli_epi128(xi0, 1));
 	xi0 = _mm256_or_si256(xi0, _mm256_srli_epi64(xi0, 54));
-	return _mm256_cvtsi256_si32(xi0);
+	return _mm_cvtsi128_si32(_mm256_castsi256_si128(xi0));
 }
 
 #endif
