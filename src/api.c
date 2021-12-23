@@ -566,48 +566,54 @@ Zn(encapsulate_benchmark_only)(void *secret, size_t secret_len,
 	Zn(ciphertext) *ct, const Zn(public_key) *pk,
 	const uint8_t *m, void *tmp, size_t tmp_len)
 {
-	uint8_t sbuf[SBUF_LEN(LOGN)];
-	size_t u;
+	uint8_t m2[LVLBYTES];
 
 	tmp = tmp_align(tmp, tmp_len, ZN(TMP_ENCAPS) - 7);
 	if (tmp == NULL) {
 		return BAT_ERR_NOSPACE;
 	}
 
-	/*
-	 * Hash m to sample s.
-	 */
-	hash_and_sample_s(sbuf, sizeof sbuf, m, LVLBYTES);
+	for (;;) {
+		uint8_t sbuf[SBUF_LEN(LOGN)];
+		size_t u;
+
+		/*
+		 * Hash m to sample s.
+		 */
+		hash_and_sample_s(sbuf, sizeof sbuf, m, LVLBYTES);
 #if N < 8
-	/* For very reduced toy versions, we don't even have a
-	   full byte, and we must clear the unused bits. */
-	sbuf[0] &= (1u << N) - 1u;
+		/* For very reduced toy versions, we don't even have a
+		   full byte, and we must clear the unused bits. */
+		sbuf[0] &= (1u << N) - 1u;
 #endif
 
-	/*
-	 * Compute c1. This may fail (rarely!) only for q = 769. Since
-	 * this function is used only for benchmarks, we do not report
-	 * the failure (it happens too rarely to change the result).
-	 */
-	if (!XCAT(bat_encrypt_, Q)(ct->c, sbuf, pk->h, LOGN, tmp)) {
-		(void)0; /* do nothing! */
+		/*
+		 * Compute c1. This may fail (rarely!) only for q = 769. Since
+		 * this function is used only for benchmarks, we just hash
+		 * the provided m[] to get a new one.
+		 */
+		if (!XCAT(bat_encrypt_, Q)(ct->c, sbuf, pk->h, LOGN, tmp)) {
+			blake2s(m2, LVLBYTES, NULL, 0, m, LVLBYTES);
+			m = m2;
+			continue;
+		}
+
+		/*
+		 * Make c2 = Hash_m(s) XOR m.
+		 */
+		hash_m(ct->c2, sbuf, sizeof sbuf);
+		for (u = 0; u < LVLBYTES; u ++) {
+			ct->c2[u] ^= m[u];
+		}
+
+		/*
+		 * Produce the shared secret (output of a successful key
+		 * exchange).
+		 */
+		make_secret(secret, secret_len, m, LVLBYTES, 1);
+
+		return 0;
 	}
-
-	/*
-	 * Make c2 = Hash_m(s) XOR m.
-	 */
-	hash_m(ct->c2, sbuf, sizeof sbuf);
-	for (u = 0; u < LVLBYTES; u ++) {
-		ct->c2[u] ^= m[u];
-	}
-
-	/*
-	 * Produce the shared secret (output of a successful key
-	 * exchange).
-	 */
-	make_secret(secret, secret_len, m, LVLBYTES, 1);
-
-	return 0;
 }
 
 /* see bat.h */
