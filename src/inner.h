@@ -11,7 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "sha3.h"
+#include "blake2.h"
 
 #if defined BAT_AVX2 && BAT_AVX2
 /*
@@ -440,6 +440,8 @@ extern const uint8_t bat_max_w_bits[];
  *
  * Size of tmp[]: 6*n elements (24*n bytes).
  * tmp[] MUST be 64-bit aligned.
+ *
+ * The seed length MUST NOT exceed 48 bytes.
  */
 int bat_keygen_make_fg(int8_t *f, int8_t *g, uint16_t *h,
 	uint32_t q, unsigned logn,
@@ -772,6 +774,46 @@ void bat_polyqp_mulneg(int16_t *d, const int16_t *a, const int32_t *b,
  * Encoding/decoding functions.
  */
 
+#if BAT_LE && BAT_UNALIGNED
+
+static inline unsigned
+dec16le(const void *src)
+{
+	return *(const uint16_t *)src;
+}
+
+static inline void
+enc16le(void *dst, unsigned x)
+{
+	*(uint16_t *)dst = x;
+}
+
+static inline uint32_t
+dec32le(const void *src)
+{
+	return *(const uint32_t *)src;
+}
+
+static inline void
+enc32le(void *dst, uint32_t x)
+{
+	*(uint32_t *)dst = x;
+}
+
+static inline uint64_t
+dec64le(const void *src)
+{
+	return *(const uint64_t *)src;
+}
+
+static inline void
+enc64le(void *dst, uint64_t x)
+{
+	*(uint64_t *)dst = x;
+}
+
+#else
+
 static inline unsigned
 dec16le(const void *src)
 {
@@ -790,28 +832,6 @@ enc16le(void *dst, unsigned x)
 	buf = dst;
 	buf[0] = (uint8_t)x;
 	buf[1] = (uint8_t)(x >> 8);
-}
-
-static inline uint32_t
-dec24le(const void *src)
-{
-	const uint8_t *buf;
-
-	buf = src;
-	return (uint32_t)buf[0]
-		| ((uint32_t)buf[1] << 8)
-		| ((uint32_t)buf[2] << 16);
-}
-
-static inline void
-enc24le(void *dst, uint32_t x)
-{
-	uint8_t *buf;
-
-	buf = dst;
-	buf[0] = (uint8_t)x;
-	buf[1] = (uint8_t)(x >> 8);
-	buf[2] = (uint8_t)(x >> 16);
 }
 
 static inline uint32_t
@@ -852,6 +872,46 @@ dec64le(const void *src)
 		| ((uint64_t)buf[5] << 40)
 		| ((uint64_t)buf[6] << 48)
 		| ((uint64_t)buf[7] << 56);
+}
+
+static inline void
+enc64le(void *dst, uint64_t x)
+{
+	uint8_t *buf;
+
+	buf = dst;
+	buf[0] = (uint64_t)x;
+	buf[1] = (uint64_t)(x >> 8);
+	buf[2] = (uint64_t)(x >> 16);
+	buf[3] = (uint64_t)(x >> 24);
+	buf[4] = (uint64_t)(x >> 32);
+	buf[5] = (uint64_t)(x >> 40);
+	buf[6] = (uint64_t)(x >> 48);
+	buf[7] = (uint64_t)(x >> 56);
+}
+
+#endif
+
+static inline uint32_t
+dec24le(const void *src)
+{
+	const uint8_t *buf;
+
+	buf = src;
+	return (uint32_t)buf[0]
+		| ((uint32_t)buf[1] << 8)
+		| ((uint32_t)buf[2] << 16);
+}
+
+static inline void
+enc24le(void *dst, uint32_t x)
+{
+	uint8_t *buf;
+
+	buf = dst;
+	buf[0] = (uint8_t)x;
+	buf[1] = (uint8_t)(x >> 8);
+	buf[2] = (uint8_t)(x >> 16);
 }
 
 /*
@@ -1102,29 +1162,52 @@ size_t bat_decode_ciphertext_769(int8_t *c, unsigned logn,
 int bat_get_seed(void *seed, size_t len);
 
 /*
- * Get a 32-bit integer out of a SHAKE context. The context must already
- * be flipped (i.e. ready for extraction).
+ * Custom PRNG that outputs 64-bit integers. It is based on BLAKE2s.
  */
-static inline uint32_t
-prng_get_u32(shake_context *rng)
-{
-	uint8_t tmp[4];
+typedef struct {
+	uint8_t buf[128];
+	uint8_t key[32];
+	uint64_t ctr;
+	size_t ptr;
+} prng_context;
 
-	shake_extract(rng, tmp, sizeof tmp);
-	return dec32le(tmp);
+/*
+ * Initialize the PRNG from the provided seed and an extra 64-bit integer.
+ * The seed length MUST NOT exceed 48 bytes.
+ */
+static inline void
+prng_init(prng_context *p, const void *seed, size_t seed_len, uint64_t label)
+{
+	blake2s_expand(p->key, sizeof p->key, seed, seed_len, label);
+	p->ctr = 0;
+	p->ptr = sizeof p->buf;
 }
 
 /*
- * Get a 64-bit integer out of a SHAKE context. The context must already
- * be flipped (i.e. ready for extraction).
+ * Get a 64-bit integer out of a PRNG.
  */
 static inline uint64_t
-prng_get_u64(shake_context *rng)
+prng_get_u64(prng_context *p)
 {
-	uint8_t tmp[8];
+	uint64_t x;
 
-	shake_extract(rng, tmp, sizeof tmp);
-	return dec64le(tmp);
+	if (p->ptr == sizeof p->buf) {
+		blake2s_expand(p->buf, sizeof p->buf,
+			p->key, sizeof p->key, p->ctr ++);
+		p->ptr = 0;
+	}
+	x = dec64le(p->buf + p->ptr);
+	p->ptr += 8;
+	return x;
+}
+
+/*
+ * Get arbitrary bytes out of a PRNG.
+ */
+static inline void
+prng_get_bytes(prng_context *p, void *dst, size_t len)
+{
+	blake2s_expand(dst, len, p->key, sizeof p->key, p->ctr ++);
 }
 
 /* ====================================================================== */

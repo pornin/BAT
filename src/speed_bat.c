@@ -525,38 +525,6 @@ MK_BENCH_FUNS(128, 256)
 MK_BENCH_FUNS(257, 512)
 MK_BENCH_FUNS(769, 1024)
 
-/*
-static int
-bench_shake_inner(void *ctx, unsigned long num)
-{
-	while (num -- > 0) {
-		shake_context sc;
-
-		shake_init(&sc, 256);
-		shake_inject(&sc, ctx, 32);
-		shake_flip(&sc);
-		shake_extract(&sc, ctx, 32);
-	}
-	return 0;
-}
-
-static void
-bench_shake(double threshold)
-{
-	double r;
-	uint8_t buf[32];
-
-	bat_get_seed(buf, sizeof buf);
-	r = do_bench(bench_shake_inner, buf, threshold);
-#if DO_BENCH86
-	printf("SHAKE: %8.0f\n", r);
-#else
-	printf("SHAKE: %8.2f\n", r / 1000.0);
-#endif
-	fflush(stdout);
-}
-*/
-
 int
 main(int argc, char *argv[])
 {

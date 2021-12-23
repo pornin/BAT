@@ -128,7 +128,7 @@
  *      Perform a key encpasulation with the provided public key. The
  *      resulting shared secret is written into secret[], while the
  *      ciphertext is written into *ct. The shared secret length is
- *      arbitrary (it internally comes from a SHAKE-based KDF) but
+ *      arbitrary (it internally comes from a BLAKE2-based KDF) but
  *      of course the sender and receiver should agree on the length to
  *      use, depending on what the secret is for.
  *
@@ -146,7 +146,7 @@
  *      Perform a key decpasulation with the provided ciphertext and
  *      private key. The resulting shared secret is written into
  *      secret[]. The shared secret length is arbitrary (it internally
- *      comes from a SHAKE-based KDF) but of course the sender and
+ *      comes from a BLAKE2-based KDF) but of course the sender and
  *      receiver should agree on the length to use, depending on what
  *      the secret is for.
  *

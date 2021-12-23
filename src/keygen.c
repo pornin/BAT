@@ -2473,7 +2473,7 @@ gauss_sample(const uint64_t *tab, unsigned kmax, uint64_t x)
  * whole seed should be abandoned anyway).
  */
 static int
-mkgauss(shake_context *rng, int8_t *f, uint32_t q, unsigned logn, int lim)
+mkgauss(prng_context *rng, int8_t *f, uint32_t q, unsigned logn, int lim)
 {
 	size_t u, n;
 	unsigned g;
@@ -4548,7 +4548,7 @@ solve_NTRU(unsigned logn, int8_t *F, int8_t *G,
  * Values q and logn MUST be a supported combination.
  */
 static int
-poly_small_mkgauss(shake_context *rng, int8_t *f, uint32_t q, unsigned logn)
+poly_small_mkgauss(prng_context *rng, int8_t *f, uint32_t q, unsigned logn)
 {
 	size_t u, n;
 	unsigned mod2;
@@ -4899,56 +4899,16 @@ bat_keygen_make_fg(int8_t *f, int8_t *g, uint16_t *h,
 	const void *seed, size_t seed_len, uint32_t *tmp)
 {
 	size_t n;
-	shake_context rng;
-	const char *tag;
-	uint8_t tt;
+	prng_context rng;
 	uint32_t normf, normg, gamma2, bound_norm2_fg;
 
 	n = (size_t)1 << logn;
-
-	static const char *tags_128[] = {
-		NULL, // unused
-		"BAT-kg-128-2:",
-		"BAT-kg-128-4:",
-		"BAT-kg-128-8:",
-		"BAT-kg-128-16:",
-		"BAT-kg-128-32:",
-		"BAT-kg-128-64:",
-		"BAT-kg-128-128:",
-		"BAT-kg-128-256:"
-	};
-	static const char *tags_257[] = {
-		NULL, // unused
-		"BAT-kg-257-2:",
-		"BAT-kg-257-4:",
-		"BAT-kg-257-8:",
-		"BAT-kg-257-16:",
-		"BAT-kg-257-32:",
-		"BAT-kg-257-64:",
-		"BAT-kg-257-128:",
-		"BAT-kg-257-256:",
-		"BAT-kg-257-512:"
-	};
-	static const char *tags_769[] = {
-		NULL, // unused
-		"BAT-kg-769-2:",
-		"BAT-kg-769-4:",
-		"BAT-kg-769-8:",
-		"BAT-kg-769-16:",
-		"BAT-kg-769-32:",
-		"BAT-kg-769-64:",
-		"BAT-kg-769-128:",
-		"BAT-kg-769-256:",
-		"BAT-kg-769-512:",
-		"BAT-kg-769-1024:"
-	};
 
 	switch (q) {
 	case 128:
 		if (logn == 0 || logn > 8) {
 			return 0;
 		}
-		tag = tags_128[logn];
 		gamma2 = 1;
 		bound_norm2_fg = 181;
 		break;
@@ -4956,7 +4916,6 @@ bat_keygen_make_fg(int8_t *f, int8_t *g, uint16_t *h,
 		if (logn == 0 || logn > 9) {
 			return 0;
 		}
-		tag = tags_257[logn];
 		gamma2 = 1;
 		bound_norm2_fg = 363;
 		break;
@@ -4964,7 +4923,6 @@ bat_keygen_make_fg(int8_t *f, int8_t *g, uint16_t *h,
 		if (logn == 0 || logn > 10) {
 			return 0;
 		}
-		tag = tags_769[logn];
 		gamma2 = 5;
 		bound_norm2_fg = 2671;
 		break;
@@ -4972,12 +4930,16 @@ bat_keygen_make_fg(int8_t *f, int8_t *g, uint16_t *h,
 		return 0;
 	}
 
-	shake_init(&rng, 256);
-	shake_inject(&rng, tag, strlen(tag));
-	tt = logn;
-	shake_inject(&rng, &tt, 1);
-	shake_inject(&rng, seed, seed_len);
-	shake_flip(&rng);
+	/*
+	 * The BLAKE2s-based PRNG is initialized with the provided seed;
+	 * the 'label' contains the modulus (q, 16-bit) and the logarithm
+	 * of the degree (logn, in bits 16..19).
+	 */
+	prng_init(&rng, seed, seed_len, q | (uint32_t)logn << 16);
+
+	/*
+	 * Generate f and g.
+	 */
 	if (!poly_small_mkgauss(&rng, f, q, logn)
 		|| !poly_small_mkgauss(&rng, g, q, logn))
 	{
