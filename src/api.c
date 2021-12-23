@@ -89,12 +89,14 @@ hash_m(void *dst, const void *sbuf, size_t sbuf_len)
 }
 
 /*
- * Compute the hash function Hash_s(), used over the message m to
- * generate the seed for encryption. Seed size is always exactly 32
- * bytes.
+ * Compute the combination of Hash_s() and Sample_s(): the provided input
+ * is nominally hashed into a seed, which is extended into enough bytes
+ * with a KDF. This is basically how SHAKE works, so we use a single SHAKE,
+ * the 'seed' existing only as the SHAKE internal state when flipping from
+ * injection to extraction modes.
  */
 static void
-hash_s(void *seed, const void *m, size_t m_len)
+hash_and_sample_s(void *sbuf, size_t sbuf_len, const void *m, size_t m_len)
 {
 	shake_context sc;
 	uint8_t label[7];
@@ -109,30 +111,6 @@ hash_s(void *seed, const void *m, size_t m_len)
 	shake_init(&sc, 256);
 	shake_inject(&sc, label, sizeof label);
 	shake_inject(&sc, m, m_len);
-	shake_flip(&sc);
-	shake_extract(&sc, seed, 32);
-}
-
-/*
- * Sample the polynomial s using the provided seed (as part of
- * encryption).
- */
-static void
-sample_s(void *sbuf, size_t sbuf_len, const void *seed)
-{
-	shake_context sc;
-	uint8_t label[7];
-
-	label[0] = 0x42;
-	label[1] = 0x41;
-	label[2] = 0x54;
-	label[3] = (uint8_t)(Q >> 8);
-	label[4] = (uint8_t)Q;
-	label[5] = LOGN;
-	label[6] = 0x74; /* 't' */
-	shake_init(&sc, 256);
-	shake_inject(&sc, label, sizeof label);
-	shake_inject(&sc, seed, 32);
 	shake_flip(&sc);
 	shake_extract(&sc, sbuf, sbuf_len);
 }
@@ -578,7 +556,7 @@ Zn(encapsulate)(void *secret, size_t secret_len,
 	 * efficient to use the random seed from the OS directly.
 	 */
 	for (;;) {
-		uint8_t m[LVLBYTES], seed[32], sbuf[SBUF_LEN(LOGN)];
+		uint8_t m[LVLBYTES], sbuf[SBUF_LEN(LOGN)];
 		size_t u;
 
 		/*
@@ -589,14 +567,9 @@ Zn(encapsulate)(void *secret, size_t secret_len,
 		}
 
 		/*
-		 * Use Hash_s() to get the encryption seed.
+		 * Hash m to sample s.
 		 */
-		hash_s(seed, m, sizeof m);
-
-		/*
-		 * Derive the seed into the polynomial s.
-		 */
-		sample_s(sbuf, sizeof sbuf, seed);
+		hash_and_sample_s(sbuf, sizeof sbuf, m, sizeof m);
 #if N < 8
 		/* For very reduced toy versions, we don't even have a
 		   full byte, and we must clear the unused bits. */
@@ -645,7 +618,7 @@ Zn(encapsulate_benchmark_only)(void *secret, size_t secret_len,
 	Zn(ciphertext) *ct, const Zn(public_key) *pk,
 	const uint8_t *m, void *tmp, size_t tmp_len)
 {
-	uint8_t seed[32], sbuf[SBUF_LEN(LOGN)];
+	uint8_t sbuf[SBUF_LEN(LOGN)];
 	size_t u;
 
 	tmp = tmp_align(tmp, tmp_len, ZN(TMP_ENCAPS) - 7);
@@ -654,14 +627,9 @@ Zn(encapsulate_benchmark_only)(void *secret, size_t secret_len,
 	}
 
 	/*
-	 * Use Hash_s() to get the encryption seed.
+	 * Hash m to sample s.
 	 */
-	hash_s(seed, m, LVLBYTES);
-
-	/*
-	 * Derive the seed into the polynomial s.
-	 */
-	sample_s(sbuf, sizeof sbuf, seed);
+	hash_and_sample_s(sbuf, sizeof sbuf, m, LVLBYTES);
 #if N < 8
 	/* For very reduced toy versions, we don't even have a
 	   full byte, and we must clear the unused bits. */
@@ -701,7 +669,7 @@ Zn(decapsulate)(void *secret, size_t secret_len,
 	void *tmp, size_t tmp_len)
 {
 	uint8_t sbuf[SBUF_LEN(LOGN)], m[LVLBYTES];
-	uint8_t sbuf_alt[SBUF_LEN(LOGN)], seed[32];
+	uint8_t sbuf_alt[SBUF_LEN(LOGN)];
 	int8_t *c_alt;
 	size_t u;
 	uint32_t d;
@@ -734,8 +702,7 @@ Zn(decapsulate)(void *secret, size_t secret_len,
 	 * obtained message m and get the exact same polynomial s
 	 * and ciphertext c1.
 	 */
-	hash_s(seed, m, sizeof m);
-	sample_s(sbuf_alt, sizeof sbuf_alt, seed);
+	hash_and_sample_s(sbuf_alt, sizeof sbuf_alt, m, sizeof m);
 #if N < 8
 	sbuf_alt[0] &= (1u << N) - 1u;
 #endif
