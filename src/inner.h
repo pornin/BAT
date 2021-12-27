@@ -50,6 +50,23 @@
 #endif
 
 /*
+ * Auto-detect 64-bit architectures.
+ */
+#ifndef BAT_64
+#if defined __x86_64__ || defined _M_X64 \
+	|| defined __ia64 || defined __itanium__ || defined _M_IA64 \
+	|| defined __powerpc64__ || defined __ppc64__ || defined __PPC64__ \
+	|| defined __64BIT__ || defined _LP64 || defined __LP64__ \
+	|| defined __sparc64__ \
+	|| defined __aarch64__ || defined _M_ARM64 \
+	|| defined __mips64
+#define BAT_64   1
+#else
+#define BAT_64   0
+#endif
+#endif
+
+/*
  * Auto-detect endianness and support of unaligned accesses.
  */
 #if defined __i386__ || defined _M_IX86 \
