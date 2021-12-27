@@ -301,13 +301,10 @@ static int \
 Bn(q, n, encapsulate)(void *ctx, unsigned long num) \
 { \
 	Bn(q, n, context) *bc; \
-	extern int Zn(q, n, encapsulate_benchmark_only)(void *, size_t, \
-		Zn(q, n, ciphertext) *, const Zn(q, n, public_key) *, \
-		const uint8_t *, void *, size_t); \
  \
 	bc = ctx; \
 	while (num -- > 0) { \
-		if (Zn(q, n, encapsulate_benchmark_only)( \
+		if (Zn(q, n, encapsulate_explicit_seed)( \
 			bc->secret, sizeof bc->secret, \
 			&bc->ct, &bc->pk, bc->randm, \
 			bc->tmp, bc->tmp_len) != 0) \
@@ -381,7 +378,7 @@ Bn(q, n, all)(double threshold) \
 	bc.enc_sk = xmalloc(bc.enc_sk_len); \
 	bc.enc_pk = xmalloc(bc.enc_pk_len); \
 	bc.enc_ct = xmalloc(bc.enc_ct_len); \
-	bc.tmp_len = 24 * n + 7; \
+	bc.tmp_len = 24 * n + 31; \
 	bc.tmp = xmalloc(bc.tmp_len); \
 	for (bc.logn = 1; (1u << bc.logn) < n; bc.logn ++); \
 	bc.sbuf = xmalloc(SBUF_LEN(bc.logn)); \

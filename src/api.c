@@ -40,9 +40,10 @@
 #endif
 
 /*
- * Ensure 8-byte alignment of the provided pointer. Returned value is the
- * aligned pointer. If, after alignment, the size is not at least equal
- * to min_tmp_len, then NULL is returned.
+ * Ensure good alignment of the provided pointer (8-byte alignment in
+ * general, 32-byte alignment if the AVX2 implementation is used).
+ * Returned value is the aligned pointer. If, after alignment, the size
+ * is not at least equal to min_tmp_len, then NULL is returned.
  */
 static void *
 tmp_align(void *tmp, size_t tmp_len, size_t min_tmp_len)
@@ -52,7 +53,11 @@ tmp_align(void *tmp, size_t tmp_len, size_t min_tmp_len)
 	if (tmp == NULL) {
 		return NULL;
 	}
+#if BAT_AVX2
+	off = (32u - (unsigned)(uintptr_t)tmp) & 31u;
+#else
 	off = (8u - (unsigned)(uintptr_t)tmp) & 7u;
+#endif
 	if (tmp_len < off || (tmp_len - off) < min_tmp_len) {
 		return NULL;
 	}
@@ -549,22 +554,11 @@ Zn(encapsulate)(void *secret, size_t secret_len,
 	}
 }
 
-/*
- * This version of encapsulate() is for internal benchmarking use only;
- * instead of extracting a random seed from the operating system, it
- * receives it from the caller; this avoids counting the cost of the
- * OS PRNG (which we do not really control). The 'm' parameter MUST
- * have length at least LVLBYTES.
- *
- * It may be argued that we could provide that as a useful API for
- * callers who want to plug their own PRNG, but this seems dangerous in
- * practice (the performance gain is slight, but the risk of
- * catastrophic misuse is great).
- */
+/* see bat.h */
 int
-Zn(encapsulate_benchmark_only)(void *secret, size_t secret_len,
+Zn(encapsulate_explicit_seed)(void *secret, size_t secret_len,
 	Zn(ciphertext) *ct, const Zn(public_key) *pk,
-	const uint8_t *m, void *tmp, size_t tmp_len)
+	const void *m, void *tmp, size_t tmp_len)
 {
 	uint8_t m2[LVLBYTES];
 
@@ -578,6 +572,16 @@ Zn(encapsulate_benchmark_only)(void *secret, size_t secret_len,
 		size_t u;
 
 		/*
+		 * If no seed is provided, then generate one randomly.
+		 */
+		if (m == NULL) {
+			if (!bat_get_seed(m2, sizeof m2)) {
+				return BAT_ERR_RANDOM;
+			}
+			m = m2;
+		}
+
+		/*
 		 * Hash m to sample s.
 		 */
 		hash_and_sample_s(sbuf, sizeof sbuf, m, LVLBYTES);
@@ -588,9 +592,10 @@ Zn(encapsulate_benchmark_only)(void *secret, size_t secret_len,
 #endif
 
 		/*
-		 * Compute c1. This may fail (rarely!) only for q = 769. Since
-		 * this function is used only for benchmarks, we just hash
-		 * the provided m[] to get a new one.
+		 * Compute c1. This may fail (very rarely!) only for q = 769;
+		 * we just hash the current seed. Since this occurrence is
+		 * very rare in practice, this process does not induce any
+		 * non-negligible bias.
 		 */
 		if (!XCAT(bat_encrypt_, Q)(ct->c, sbuf, pk->h, LOGN, tmp)) {
 			blake2s(m2, LVLBYTES, NULL, 0, m, LVLBYTES);
@@ -603,7 +608,7 @@ Zn(encapsulate_benchmark_only)(void *secret, size_t secret_len,
 		 */
 		hash_m(ct->c2, sbuf, sizeof sbuf);
 		for (u = 0; u < LVLBYTES; u ++) {
-			ct->c2[u] ^= m[u];
+			ct->c2[u] ^= ((const uint8_t *)m)[u];
 		}
 
 		/*

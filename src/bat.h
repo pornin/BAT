@@ -137,6 +137,23 @@
  *      temporary buffer (tmp, of size tmp_len bytes) is too small, then
  *      BAT_ERR_NOSPACE is returned (see BAT_qqq_nnn_TMP_ENCAPS).
  *
+ *   int bat_qqq_nnn_encapsulate_explicit_seed(
+ *           void *secret, size_t secret_len,
+ *           bat_qqq_nnn_ciphertext *ct,
+ *           const bat_qqq_nnn_public_key *pk,
+ *           const uint8_t *m, void *tmp, size_t tmp_len);
+ *
+ *      This is a variant of bat_qqq_nnn_encapsulate(), in which the
+ *      random seed (m[] value) is provided explicitly. This function
+ *      is meant mostly for benchmarks and reproducible test vectors,
+ *      to avoid the overhead and unpredictability of the OS-provided
+ *      random generator; in general, bat_qqq_nnn_encapsulate() SHOULD
+ *      be used instead. If m is NULL, then the OS RNG is used to create
+ *      the seed. When m is not NULL, then it MUST be generated as a
+ *      uniform unpredictable sequence of bytes of the right length for
+ *      the target BAT version (10, 16 or 32 bytes, for BAT-128-256,
+ *      BAT-257-512 and BAT-769-1024, respectively).
+ *
  *   int bat_qqq_nnn_decapsulate(
  *           void *secret, size_t secret_len,
  *           const bat_qqq_nnn_ciphertext *ct,
@@ -208,6 +225,11 @@ int bat_ ## q ## _ ## n ## _encapsulate( \
 	bat_ ## q ## _ ## n ## _ciphertext *ct, \
 	const bat_ ## q ## _ ## n ## _public_key *pk, \
 	void *tmp, size_t tmp_len); \
+int bat_ ## q ## _ ## n ## _encapsulate_explicit_seed( \
+	void *secret, size_t secret_len, \
+	bat_ ## q ## _ ## n ## _ciphertext *ct, \
+	const bat_ ## q ## _ ## n ## _public_key *pk, \
+	const void *m, void *tmp, size_t tmp_len); \
 int bat_ ## q ## _ ## n ## _decapsulate( \
 	void *secret, size_t secret_len, \
 	const bat_ ## q ## _ ## n ## _ciphertext *ct, \
@@ -223,25 +245,23 @@ BAT_MK(769, 1024, 32, uint16_t)
 /*
  * Macros for temporary buffer sizes.
  *
- * Each length is in bytes and accounts for an extra 7 bytes for internal
- * alignment adjustment. If the provided buffera already ensures proper
- * generic alignment (e.g. it was obtained from malloc()), then the length
- * can be 7 bytes smaller.
+ * Each length is in bytes and accounts for an extra 31 bytes for internal
+ * alignment adjustment.
  */
-#define BAT_128_256_TMP_KEYGEN          6151
-#define BAT_128_256_TMP_DECODE_PRIV     6151
-#define BAT_128_256_TMP_ENCAPS           775
-#define BAT_128_256_TMP_DECAPS          2055
+#define BAT_128_256_TMP_KEYGEN          6174
+#define BAT_128_256_TMP_DECODE_PRIV     6174
+#define BAT_128_256_TMP_ENCAPS           799
+#define BAT_128_256_TMP_DECAPS          2079
 
-#define BAT_257_512_TMP_KEYGEN         12295
-#define BAT_257_512_TMP_DECODE_PRIV    12295
-#define BAT_257_512_TMP_ENCAPS          2055
-#define BAT_257_512_TMP_DECAPS          4103
+#define BAT_257_512_TMP_KEYGEN         12319
+#define BAT_257_512_TMP_DECODE_PRIV    12319
+#define BAT_257_512_TMP_ENCAPS          2079
+#define BAT_257_512_TMP_DECAPS          4127
 
-#define BAT_769_1024_TMP_KEYGEN        24583
-#define BAT_769_1024_TMP_DECODE_PRIV   24583
-#define BAT_769_1024_TMP_ENCAPS         4103
-#define BAT_769_1024_TMP_DECAPS         8199
+#define BAT_769_1024_TMP_KEYGEN        24607
+#define BAT_769_1024_TMP_DECODE_PRIV   24607
+#define BAT_769_1024_TMP_ENCAPS         4127
+#define BAT_769_1024_TMP_DECAPS         8223
 
 /*
  * Error codes.
