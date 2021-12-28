@@ -13,7 +13,7 @@ LD = cl
 LDFLAGS = /nologo
 LIBS =
 
-OBJ = api_128_256.obj api_257_512.obj api_769_1024.obj codec.obj fft.obj fnr.obj kem128.obj kem257.obj kem769.obj keygen.obj modqp.obj prng.obj sha3.obj
+OBJ = api_128_256.obj api_257_512.obj api_769_1024.obj codec.obj fft.obj fnr.obj kem128.obj kem257.obj kem769.obj keygen.obj modqp.obj prng.obj blake2b.obj blake2s.obj
 
 all: test_bat.exe speed_bat.exe
 
@@ -23,50 +23,53 @@ clean:
 test_bat.exe: $(OBJ) test_bat.obj
 	$(LD) $(LDFLAGS) /Fe:test_bat.exe test_bat.obj $(OBJ) $(LIBS)
 
-speed_bat.exe: speed_bat.obj $(OBJ)
+speed_bat.exe: $(OBJ) speed_bat.obj
 	$(LD) $(LDFLAGS) /Fe:speed_bat.exe speed_bat.obj $(OBJ) $(LIBS)
 
-api_128_256.obj: api_128_256.c api.c bat.h inner.h sha3.h
+api_128_256.obj: api_128_256.c api.c bat.h inner.h blake2.h
 	$(CC) $(CFLAGS) /c /Fo:api_128_256.obj api_128_256.c
 
-api_257_512.obj: api_257_512.c api.c bat.h inner.h sha3.h
+api_257_512.obj: api_257_512.c api.c bat.h inner.h blake2.h
 	$(CC) $(CFLAGS) /c /Fo:api_257_512.obj api_257_512.c
 
-api_769_1024.obj: api_769_1024.c api.c bat.h inner.h sha3.h
+api_769_1024.obj: api_769_1024.c api.c bat.h inner.h blake2.h
 	$(CC) $(CFLAGS) /c /Fo:api_769_1024.obj api_769_1024.c
 
-codec.obj: codec.c inner.h sha3.h
+codec.obj: codec.c inner.h blake2.h
 	$(CC) $(CFLAGS) /c /Fo:codec.obj codec.c
 
-fft.obj: fft.c inner.h sha3.h
+fft.obj: fft.c inner.h blake2.h
 	$(CC) $(CFLAGS) /c /Fo:fft.obj fft.c
 
-fnr.obj: fnr.c inner.h sha3.h
+fnr.obj: fnr.c inner.h blake2.h
 	$(CC) $(CFLAGS) /c /Fo:fnr.obj fnr.c
 
-kem128.obj: kem128.c inner.h sha3.h
+kem128.obj: kem128.c inner.h blake2.h
 	$(CC) $(CFLAGS) /c /Fo:kem128.obj kem128.c
 
-kem257.obj: kem257.c modgen.c inner.h sha3.h
+kem257.obj: kem257.c modgen.c inner.h blake2.h
 	$(CC) $(CFLAGS) /c /Fo:kem257.obj kem257.c
 
-kem769.obj: kem769.c modgen.c inner.h sha3.h
+kem769.obj: kem769.c modgen.c inner.h blake2.h
 	$(CC) $(CFLAGS) /c /Fo:kem769.obj kem769.c
 
-keygen.obj: keygen.c inner.h sha3.h
+keygen.obj: keygen.c inner.h blake2.h
 	$(CC) $(CFLAGS) /c /Fo:keygen.obj keygen.c
 
-modqp.obj: modqp.c modgen.c inner.h sha3.h
+modqp.obj: modqp.c modgen.c inner.h blake2.h
 	$(CC) $(CFLAGS) /c /Fo:modqp.obj modqp.c
 
-prng.obj: prng.c inner.h sha3.h
+prng.obj: prng.c inner.h blake2.h
 	$(CC) $(CFLAGS) /c /Fo:prng.obj prng.c
 
-sha3.obj: sha3.c inner.h sha3.h
-	$(CC) $(CFLAGS) /c /Fo:sha3.obj sha3.c
+blake2b.obj: blake2b.c inner.h blake2.h
+	$(CC) $(CFLAGS) /c /Fo:blake2b.obj blake2b.c
 
-speed_bat.obj: speed_bat.c inner.h sha3.h
+blake2s.obj: blake2s.c inner.h blake2.h
+	$(CC) $(CFLAGS) /c /Fo:blake2s.obj blake2s.c
+
+speed_bat.obj: speed_bat.c bat.h inner.h blake2.h
 	$(CC) $(CFLAGS) /c /Fo:speed_bat.obj speed_bat.c
 
-test_bat.obj: test_bat.c inner.h sha3.h
+test_bat.obj: test_bat.c bat.h inner.h blake2.h
 	$(CC) $(CFLAGS) /c /Fo:test_bat.obj test_bat.c

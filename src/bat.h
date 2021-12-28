@@ -248,8 +248,8 @@ BAT_MK(769, 1024, 32, uint16_t)
  * Each length is in bytes and accounts for an extra 31 bytes for internal
  * alignment adjustment.
  */
-#define BAT_128_256_TMP_KEYGEN          6174
-#define BAT_128_256_TMP_DECODE_PRIV     6174
+#define BAT_128_256_TMP_KEYGEN          6175
+#define BAT_128_256_TMP_DECODE_PRIV     6175
 #define BAT_128_256_TMP_ENCAPS           799
 #define BAT_128_256_TMP_DECAPS          2079
 

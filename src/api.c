@@ -151,7 +151,7 @@ Zn(keygen)(Zn(private_key) *sk, void *tmp, size_t tmp_len)
 	prng_context rng;
 	uint8_t rng_seed[32];
 
-	tmp = tmp_align(tmp, tmp_len, ZN(TMP_KEYGEN) - 7);
+	tmp = tmp_align(tmp, tmp_len, ZN(TMP_KEYGEN) - 31);
 	if (tmp == NULL) {
 		return BAT_ERR_NOSPACE;
 	}
@@ -316,7 +316,7 @@ Zn(decode_private_key)(Zn(private_key) *sk, const void *in, size_t max_in_len,
 			return 0;
 		}
 		off += len;
-		tmp = tmp_align(tmp, tmp_len, ZN(TMP_DECODE_PRIV) - 7);
+		tmp = tmp_align(tmp, tmp_len, ZN(TMP_DECODE_PRIV) - 31);
 		if (tmp == NULL) {
 			return 0;
 		}
@@ -496,7 +496,7 @@ Zn(encapsulate)(void *secret, size_t secret_len,
 	Zn(ciphertext) *ct, const Zn(public_key) *pk,
 	void *tmp, size_t tmp_len)
 {
-	tmp = tmp_align(tmp, tmp_len, ZN(TMP_ENCAPS) - 7);
+	tmp = tmp_align(tmp, tmp_len, ZN(TMP_ENCAPS) - 31);
 	if (tmp == NULL) {
 		return BAT_ERR_NOSPACE;
 	}
@@ -562,7 +562,7 @@ Zn(encapsulate_explicit_seed)(void *secret, size_t secret_len,
 {
 	uint8_t m2[LVLBYTES];
 
-	tmp = tmp_align(tmp, tmp_len, ZN(TMP_ENCAPS) - 7);
+	tmp = tmp_align(tmp, tmp_len, ZN(TMP_ENCAPS) - 31);
 	if (tmp == NULL) {
 		return BAT_ERR_NOSPACE;
 	}
@@ -633,7 +633,7 @@ Zn(decapsulate)(void *secret, size_t secret_len,
 	size_t u;
 	uint32_t d;
 
-	tmp = tmp_align(tmp, tmp_len, ZN(TMP_DECAPS) - 7);
+	tmp = tmp_align(tmp, tmp_len, ZN(TMP_DECAPS) - 31);
 	if (tmp == NULL) {
 		return BAT_ERR_NOSPACE;
 	}
@@ -665,7 +665,7 @@ Zn(decapsulate)(void *secret, size_t secret_len,
 #endif
 	c_alt = tmp;
 	tmp = tmp_align((void *)(c_alt + N), ZN(TMP_DECAPS) - N,
-		ZN(TMP_ENCAPS) - 7);
+		ZN(TMP_ENCAPS) - 31);
 	if (tmp == NULL) {
 		/* This should never happen in practice. */
 		return BAT_ERR_NOSPACE;

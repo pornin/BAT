@@ -76,8 +76,8 @@ blake2b.o: blake2b.c inner.h blake2.h
 blake2s.o: blake2s.c inner.h blake2.h
 	$(CC) $(CFLAGS) -c -o blake2s.o blake2s.c
 
-speed_bat.o: speed_bat.c inner.h blake2.h
+speed_bat.o: speed_bat.c bat.h inner.h blake2.h
 	$(CC) $(CFLAGS) -c -o speed_bat.o speed_bat.c
 
-test_bat.o: test_bat.c inner.h blake2.h
+test_bat.o: test_bat.c bat.h inner.h blake2.h
 	$(CC) $(CFLAGS) -c -o test_bat.o test_bat.c
